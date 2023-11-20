@@ -12,6 +12,12 @@ from snowflake.connector.pandas_tools import write_pandas
 from azure.storage.blob import BlobServiceClient, BlobClient, generate_blob_sas, BlobSasPermissions
 import json
 from azure.cosmos import CosmosClient, PartitionKey, exceptions
+from azure.cognitiveservices.vision.computervision import ComputerVisionClient
+from msrest.authentication import CognitiveServicesCredentials
+from io import BytesIO
+from azure.ai.textanalytics import TextAnalyticsClient
+from azure.core.credentials import AzureKeyCredential
+import hashlib
 
 load_dotenv()
 
@@ -54,12 +60,49 @@ COSMOS_ENDPOINT='https://insightnosql.documents.azure.com:443/'
 COSMOS_KEY='MvUd6aSQ91pyS2EaMhKK6S994CnOLsLnurIsMKjyBx4ueqVXDBDCNAkSGHeQ9SRLs5kqL90NLl4rACDb31VJOw=='
 cosmos_client = CosmosClient(url=COSMOS_ENDPOINT, credential=COSMOS_KEY)
 database = cosmos_client.create_database_if_not_exists(id='insightpii')
-container_name = 'raw_data'
-container = database.create_container_if_not_exists(
-    id=container_name,
-    partition_key=PartitionKey(path="/LAST_NAME"),
-    offer_throughput=400
-)
+
+
+#azure vision 
+vision_key = "c8b23a0f83a549c8a01a900084e4aaa9"
+vision_endpoint = "https://insightpii.cognitiveservices.azure.com/"
+credentials = CognitiveServicesCredentials(vision_key)
+vision_client = ComputerVisionClient(vision_endpoint, credentials)
+
+#azure cognitive services
+cog_key = "746d3d4125bc494e9cdeff77e08f2e72"
+cog_endpoint = "https://insightpii-cog.cognitiveservices.azure.com/"
+text_analytics_client = TextAnalyticsClient(endpoint=cog_endpoint, credential=AzureKeyCredential(cog_key))
+
+def entity_recognition(client, documents):
+    try:
+        response = client.recognize_entities(documents=documents)
+        return response
+    except Exception as err:
+        print("Encountered exception. {}".format(err))
+
+def extract_text_from_image(image_content_bytes):
+    image_stream = BytesIO(image_content_bytes)
+    response = vision_client.read_in_stream(image_stream, raw=True)
+    read_operation_location = response.headers["Operation-Location"]
+    operation_id = read_operation_location.split("/")[-1]
+    # Wait for the read operation to complete
+    import time
+    while True:
+        read_result = vision_client.get_read_result(operation_id)
+        if read_result.status not in ['notStarted', 'running']:
+            break
+        time.sleep(1)
+    # Extract text
+    text_data = ""
+    if read_result.status == 'succeeded':
+        for text_result in read_result.analyze_result.read_results:
+            for line in text_result.lines:
+                text_data += line.text + "\n"
+    return text_data
+
+def read_blob(blob_client):
+    downloader = blob_client.download_blob()
+    return downloader.readall()
 
 def resembles_date(s):
     date_patterns = [
@@ -130,6 +173,14 @@ def populate_sf_data(conn, schema):
     cur.close()
     return dfs
 
+def clean_cosmos_item(item):
+    return {k: v for k, v in item.items() if not k.startswith("_") and k != "id"}
+
+def create_hash(row):
+    combined_string = ''.join(row.astype(str))
+    hash_object = hashlib.md5(combined_string.encode())
+    return hash_object.hexdigest()
+
 # Page setup
 st.set_page_config(page_title="InsightAIQ", layout="wide")
 pages = ['Link Records', 'Identify Records', 'Delete Records', 'Admin Panel']
@@ -156,7 +207,9 @@ if choice == 'Link Records':
         if sf:
             sf_df = populate_sf_data(conn, SNOWFLAKE_RAW_SCHEMA)
             full_data = full_data | sf_df
+            st.markdown('##')
             st.write('Snowflake data loaded.')
+            st.markdown('##')
             st.metric(label="Snowflake", value=f"{len(sf_df)} Tables", delta=f"{sum(len(df) for df in sf_df.values())} Rows")
     with col2:
         st.image("Assets/Images/Postgres.png", width=100)
@@ -170,26 +223,87 @@ if choice == 'Link Records':
                 query = f'SELECT * FROM "{schema_name}"."{table_name}"'
                 tables_dict[table_name] = pd.read_sql(query, engine)
             full_data = full_data | tables_dict
+            st.markdown('##')
             st.write('Postgres data loaded.')
+            st.markdown('##')
             st.metric(label="Postgres", value=f"{len(tables_dict)} Tables", delta=f"{sum(len(df) for df in tables_dict.values())} Rows")
     with col3:
         st.image("Assets/Images/azuresa.png", width=100)
         sa = st.checkbox('Azure Storage',key='sa_check')
         if sa:
-            st.write('Great!')
+            blob_service_client = BlobServiceClient.from_connection_string(connect_str)
+            container_client = blob_service_client.get_container_client(container="iaqbrksa")
+            extracted_text_dict = {}
+            for blob in container_client.list_blobs():
+                blob_client = container_client.get_blob_client(blob)
+                blob_content = read_blob(blob_client)
+                extracted_text = extract_text_from_image(blob_content)
+                documents = [extracted_text]
+                result = entity_recognition(text_analytics_client, documents)
+                entities_info = ""
+                if result:
+                    for doc in result:
+                        if not doc.is_error:
+                            for entity in doc.entities:
+                                entities_info += f"{entity.text}"
+                updated_text = entities_info
+                extracted_text_dict[blob.name] = pd.DataFrame({'text': [updated_text]})
+            full_data = full_data | extracted_text_dict  
+            st.markdown('##') 
+            st.write('Azure Storage data loaded.')
+            st.markdown('##')
+            st.metric(label="AzureSA", value=f"{len(extracted_text_dict)} Tables", delta=f"{sum(len(df) for df in extracted_text_dict.values())} Rows")
     with col4:
         st.image("Assets/Images/adls.png", width=150)
         adls = st.checkbox('ADLS gen2',key='adls_check')
         if adls:
-            st.write('Great!')
+            blob_service_client = BlobServiceClient.from_connection_string(connect_str)
+            container_client = blob_service_client.get_container_client(container="adlsg2")
+            extracted_text_dict_adls = {}
+            for blob in container_client.list_blobs():
+                blob_client = container_client.get_blob_client(blob)
+                blob_content = read_blob(blob_client)
+                extracted_text = extract_text_from_image(blob_content)
+                documents = [extracted_text]
+                result = entity_recognition(text_analytics_client, documents)
+                entities_info = ""
+                if result:
+                    for doc in result:
+                        if not doc.is_error:
+                            for entity in doc.entities:
+                                entities_info += f"{entity.text}"
+                updated_text = entities_info
+                extracted_text_dict_adls[blob.name] = pd.DataFrame({'text': [updated_text]})
+            full_data = full_data | extracted_text_dict_adls  
+            st.markdown('##')
+            st.write('ADLS gen2 data loaded.')
+            st.markdown('##')
+            st.metric(label="ADLS", value=f"{len(extracted_text_dict_adls)} Tables", delta=f"{sum(len(df) for df in extracted_text_dict_adls.values())} Rows")
     with col5:
         st.image("Assets/Images/cosmos.png", width=100)
         cdb = st.checkbox('CosmosDb',key='cdb_check')
         if cdb:
-            st.write('Great!')
-    st.write(full_data)
-
+            dataframes_dict = {}
+            for container_properties in database.list_containers():
+                container_name = container_properties['id']
+                container = database.get_container_client(container_name)
+                items = list(container.query_items(
+                    query="SELECT * FROM c",
+                    enable_cross_partition_query=True
+                ))
+                cleaned_items = [clean_cosmos_item(item) for item in items]
+                df = pd.DataFrame(cleaned_items)
+                dataframes_dict[container_name] = df
+            full_data = full_data | dataframes_dict   
+            st.markdown('##')
+            st.write('CosmosDb data loaded.')
+            st.markdown('##')
+            st.metric(label="Cosmos", value=f"{len(dataframes_dict)} Tables", delta=f"{sum(len(df) for df in dataframes_dict.values())} Rows")
     
+    st.divider()
+    st.subheader("Begin Data Linking.")
+    if st.button("Link Data Sources",key='link_data'):
+        st.write(full_data)
 
 
 elif choice == 'Admin Panel':
@@ -346,23 +460,35 @@ elif choice == 'Admin Panel':
                 for image_file in image_files:
                     df = pd.read_csv(image_file)
                     df = process_dataframe(df)
-                    df['id']=df['LAST_NAME']
+                    df['id'] = df.apply(lambda row: create_hash(row), axis=1)
                     json_data = df.to_json(orient='records')
                     records = json.loads(json_data)
+                    container_name = image_file.name.replace(' ','_').replace('.csv','').upper()
+                    container = database.create_container_if_not_exists(
+                        id=container_name,
+                        partition_key=PartitionKey(path=f"/id"),
+                        offer_throughput=400
+                    )
                     for record in records:
-                        container.upsert_item(record)
+                        try:
+                            container.upsert_item(record)
+                        except exceptions.CosmosHttpResponseError as e:
+                            st.write(f"Error inserting record: {record}")
+                            st.write(f"Cosmos DB Error: {e}")
+                            break
                     st.toast(f'{image_file} uploaded to cosmos')
                 st.success("All files uploaded.")
         st.markdown('##')
         cosmos_delete = st.toggle('Delete Cosmos data', key="cosmos_del")
         if cosmos_delete:
             with st.status("Deleting Cosmos data...", expanded=True) as status:
-                query = "SELECT * FROM c"
-                for item in container.query_items(query=query, enable_cross_partition_query=True):
-                    try:
-                        container.delete_item(item, partition_key=item["LAST_NAME"])
-                    except exceptions.CosmosHttpResponseError as e:
-                        st.write(f'Error deleting item {item["id"]}: {e}')
+                try:
+                    for container_properties in database.list_containers():
+                        container_name = container_properties['id']
+                        st.toast(f"Deleting container: {container_name}")
+                        database.delete_container(container_name)
+                except exceptions.CosmosHttpResponseError as e:
+                    st.write(f"An error occurred: {e}")
                 status.update(label="CosmosDbwiped clean", state="complete", expanded=False)
 
 
