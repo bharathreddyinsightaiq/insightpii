@@ -491,7 +491,11 @@ elif choice == 'Admin Panel':
                     st.write(f"An error occurred: {e}")
                 status.update(label="CosmosDbwiped clean", state="complete", expanded=False)
 
-
+# from qdrant_client import QdrantClient
+# qdrant_client = QdrantClient(
+#     url="https://4e285e1c-046b-4c0c-85e5-d4bafe0663cb.us-east4-0.gcp.cloud.qdrant.io:6333", 
+#     api_key="GXtaxI8I-rd4AtL3uArs0veLcavr_-Tnec2nOFmLXxjH08tLqDApaA",
+# )
 
 
 
