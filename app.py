@@ -18,6 +18,11 @@ from io import BytesIO
 from azure.ai.textanalytics import TextAnalyticsClient
 from azure.core.credentials import AzureKeyCredential
 import hashlib
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import PointStruct, Payload, VectorParams, Distance
+from openai import OpenAI
+
+
 
 load_dotenv()
 
@@ -56,22 +61,56 @@ conn.cursor().execute(f"USE SCHEMA {SNOWFLAKE_RAW_SCHEMA}")
 connect_str = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
 
 #CososDB
-COSMOS_ENDPOINT='https://insightnosql.documents.azure.com:443/'
-COSMOS_KEY='MvUd6aSQ91pyS2EaMhKK6S994CnOLsLnurIsMKjyBx4ueqVXDBDCNAkSGHeQ9SRLs5kqL90NLl4rACDb31VJOw=='
+COSMOS_ENDPOINT=os.getenv("COSMOS_ENDPOINT")
+COSMOS_KEY=os.getenv("COSMOS_KEY")
 cosmos_client = CosmosClient(url=COSMOS_ENDPOINT, credential=COSMOS_KEY)
 database = cosmos_client.create_database_if_not_exists(id='insightpii')
 
 
 #azure vision 
-vision_key = "c8b23a0f83a549c8a01a900084e4aaa9"
-vision_endpoint = "https://insightpii.cognitiveservices.azure.com/"
+vision_key = os.getenv("VISION_KEY")
+vision_endpoint = os.getenv("VISION_ENDPOINT")
 credentials = CognitiveServicesCredentials(vision_key)
 vision_client = ComputerVisionClient(vision_endpoint, credentials)
 
 #azure cognitive services
-cog_key = "746d3d4125bc494e9cdeff77e08f2e72"
-cog_endpoint = "https://insightpii-cog.cognitiveservices.azure.com/"
+cog_key = os.getenv("COG_KEY")
+cog_endpoint = os.getenv("COG_ENDPOINT")
 text_analytics_client = TextAnalyticsClient(endpoint=cog_endpoint, credential=AzureKeyCredential(cog_key))
+
+#qdrant client
+qdrant_url = os.getenv("QDRANT_ENDPOINT")
+qdrant_key = os.getenv("QDRANT_KEY")
+qdrant_client = QdrantClient(
+    url=qdrant_url, 
+    api_key=qdrant_key,
+)
+
+#OpenAI client
+openai_api_key = os.getenv("OPENAI_KEY")
+client = OpenAI(api_key=openai_api_key)
+
+
+def query_qdrant(query, collection_name, top_k=1):
+    # Creates embedding vector from user query
+    embedded_query = client.embeddings.create(
+        input=[query],
+        model="text-embedding-ada-002",
+    ).data[0].embedding
+
+    query_results = qdrant_client.search(
+        collection_name=collection_name,
+        query_vector=(
+            embedded_query
+        ),
+        limit=top_k,
+    )
+
+    return query_results
+
+def get_embedding(text, model="text-embedding-ada-002"):
+    text = text.replace("\n", " ")
+    return client.embeddings.create(input = [text], model=model).data[0].embedding
 
 def entity_recognition(client, documents):
     try:
@@ -234,6 +273,7 @@ if choice == 'Link Records':
             blob_service_client = BlobServiceClient.from_connection_string(connect_str)
             container_client = blob_service_client.get_container_client(container="iaqbrksa")
             extracted_text_dict = {}
+            temp_df_azure = pd.DataFrame(columns=['text','source'])
             for blob in container_client.list_blobs():
                 blob_client = container_client.get_blob_client(blob)
                 blob_content = read_blob(blob_client)
@@ -247,7 +287,8 @@ if choice == 'Link Records':
                             for entity in doc.entities:
                                 entities_info += f"{entity.text}"
                 updated_text = entities_info
-                extracted_text_dict[blob.name] = pd.DataFrame({'text': [updated_text]})
+                temp_df_azure = pd.concat([temp_df_azure,pd.DataFrame({'text': [updated_text], '_source': blob.name})], ignore_index=True)
+                extracted_text_dict['unstructured'] = temp_df_azure
             full_data = full_data | extracted_text_dict  
             st.markdown('##') 
             st.write('Azure Storage data loaded.')
@@ -260,6 +301,7 @@ if choice == 'Link Records':
             blob_service_client = BlobServiceClient.from_connection_string(connect_str)
             container_client = blob_service_client.get_container_client(container="adlsg2")
             extracted_text_dict_adls = {}
+            temp_df_adls = pd.DataFrame(columns=['text','source'])
             for blob in container_client.list_blobs():
                 blob_client = container_client.get_blob_client(blob)
                 blob_content = read_blob(blob_client)
@@ -273,8 +315,9 @@ if choice == 'Link Records':
                             for entity in doc.entities:
                                 entities_info += f"{entity.text}"
                 updated_text = entities_info
-                extracted_text_dict_adls[blob.name] = pd.DataFrame({'text': [updated_text]})
-            full_data = full_data | extracted_text_dict_adls  
+                temp_df_adls = pd.concat([temp_df_adls,pd.DataFrame({'text': [updated_text], '_source': blob.name})], ignore_index=True)
+                extracted_text_dict['unstructured'] = temp_df_adls
+            full_data = full_data | extracted_text_dict  
             st.markdown('##')
             st.write('ADLS gen2 data loaded.')
             st.markdown('##')
@@ -303,9 +346,41 @@ if choice == 'Link Records':
     st.divider()
     st.subheader("Begin Data Linking.")
     if st.button("Link Data Sources",key='link_data'):
-        st.write(full_data)
-
-
+        with st.status("Data linkage started.", expanded=True) as status:
+            for table in full_data:
+                cols_to_concatenate = full_data[table].columns.difference(['_source'])
+                full_data[table]['_full_text'] = full_data[table][cols_to_concatenate].apply(lambda row: ' '.join(row.values.astype(str)), axis=1)
+                full_data[table]["_embedding"] = full_data[table]['_full_text'].apply(lambda x: get_embedding(x, model='text-embedding-ada-002'))
+                collections = qdrant_client.get_collections().collections
+                if table not in [x.name for x in collections]:
+                    qdrant_client.create_collection(
+                        table,
+                        vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
+                    )  
+                if table != 'unstructured':
+                    points = [
+                        PointStruct(
+                            id=index,
+                            vector=row['_embedding'],
+                            payload={"full_text" : row['_full_text']}
+                        ) for index, row in full_data[table].iterrows()
+                    ]
+                    qdrant_client.upsert(collection_name=table, points=points)
+                elif table == 'unstructured':
+                    points = [
+                        PointStruct(
+                            id=index,
+                            vector=row['_embedding'],
+                            payload={
+                                "full_text" : row['_full_text'],
+                                "source" : row['_source']
+                            }
+                        ) for index, row in full_data[table].iterrows()
+                    ]
+                    qdrant_client.upsert(collection_name=table, points=points)                    
+                st.toast(f"{table} data vectors uploaded to qdrant.")
+            status.update(label="Qdrant database hydrated.", state="complete", expanded=False)
+            
 elif choice == 'Admin Panel':
     st.image("Assets/Images/logo.png", width=400)
     st.title('Insight PII')
@@ -491,17 +566,46 @@ elif choice == 'Admin Panel':
                     st.write(f"An error occurred: {e}")
                 status.update(label="CosmosDbwiped clean", state="complete", expanded=False)
 
-# from qdrant_client import QdrantClient
-# qdrant_client = QdrantClient(
-#     url="https://4e285e1c-046b-4c0c-85e5-d4bafe0663cb.us-east4-0.gcp.cloud.qdrant.io:6333", 
-#     api_key="GXtaxI8I-rd4AtL3uArs0veLcavr_-Tnec2nOFmLXxjH08tLqDApaA",
-# )
 
+    st.divider()
+    st.header('Vector Databases')
+    tab1, tab2, tab3 = st.tabs(["Qdrant", "Pinecone", "Neon"])
 
+    with tab1:
+        st.image("Assets/Images/qdrant.jpeg", width=100)
+        st.subheader("Qdrant Vector Database")
+        qd_delete = st.toggle('Delete qdrant data', key="qdrant")
+        if qd_delete:
+            collections = qdrant_client.get_collections()
+            for x in collections.collections:
+                qdrant_client.delete_collection(collection_name=x.name)
+                st.toast(f"{x.name} deleted from qdrant.")
+            st.success("All vectors removed.")
 
-    
+    with tab2:
+        st.image("Assets/Images/pinecone.png", width=100)
+        st.subheader("Pinecone Vector Database")
+        pc_delete = st.toggle('Delete Pinecone data', key="pcone")
 
-    
-         
-    
+    with tab3:
+        st.image("Assets/Images/neon.png", width=100)
+        st.subheader("Neon Vector Database")
+        neon_delete = st.toggle('Delete Neon data', key="Neon")
 
+elif choice == 'Identify Records':
+    st.image("Assets/Images/logo.png", width=400)
+    st.title('Insight PII')
+    st.subheader('PII identification and management solutions')
+    st.markdown('##')
+    st.write("Seamlessly unify your organization's data sources, effortlessly identify records for individuals,"
+             " and even uncover references within unstructured data, documents, and images. Unleash the full "
+             "potential of your data integration and record identification needs today!")
+    st.subheader('', divider='rainbow')
+    st.markdown('##')
+
+    st.header('Identify an entity across datasets.')
+    title = st.text_input('Type in a few attributes about the entity you want to find. See an example', 'Johonson White 10932 Brigge road jwhite@domain.com')
+    if st.button("find me"):
+        query_results = query_qdrant(query=title,collection_name='BANKACCOUNT')
+        for i, pii in enumerate(query_results):
+            st.write(f'{i + 1}. {pii.payload["full_text"]} (Score: {round(pii.score, 2)})')
