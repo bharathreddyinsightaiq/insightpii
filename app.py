@@ -21,6 +21,8 @@ import hashlib
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import PointStruct, Payload, VectorParams, Distance
 from openai import OpenAI
+from datetime import datetime, timedelta
+import base64
 
 load_dotenv()
 
@@ -215,6 +217,17 @@ def create_hash(row):
     combined_string = ''.join(row.astype(str))
     hash_object = hashlib.md5(combined_string.encode())
     return hash_object.hexdigest()
+
+def displayPDF(file):
+    with open(file, "rb") as f:
+        base64_pdf = base64.b64encode(f.read()).decode('utf-8')
+    pdf_display = F'<iframe src="data:application/pdf;base64,{base64_pdf}" width="350" height="500" type="application/pdf"></iframe>'
+    st.markdown(pdf_display, unsafe_allow_html=True)
+
+def download_blob_to_file(blob_service_client, container_name, blob_name, file_path):
+    blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
+    with open(file_path, "wb") as download_file:
+        download_file.write(blob_client.download_blob().readall())
 
 # Page setup
 st.set_page_config(page_title="InsightAIQ", layout="wide")
@@ -709,6 +722,70 @@ elif choice == 'Identify Records':
             html+=pd.DataFrame(full_data[table][full_data[table]['_full_text']==content['payload']['full_text']].iloc[:,:-1]).to_html()
             html+='<p>----------------------------</p>'
             st.divider()
+
+        us_response = qdrant_client.search(
+                collection_name='unstructured',
+                query_vector=get_embedding(title),
+                limit=10,
+                with_payload=True,
+                with_vectors=True,
+                score_threshold=.75,
+            )
+
+        for resp in us_response:
+            if resp.score > confidence_score_selected/100:
+                st.write(f":green[Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
+                html+=f"<h3>Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
+                account_name = 'iaqbrksa'
+                account_key = 'BIbDM4LDLpQKHgpfSG64YwFoMYBK0PbXjgTfRBkIV5hDysP+Dzmgid6Lki7E4nF2fc6byhmaQA4e+ASt09A8HQ=='
+                container_name = 'iaqbrksa'
+                blob_name = resp.payload['source']
+                sas_token = generate_blob_sas(
+                    account_name=account_name,
+                    container_name=container_name,
+                    blob_name=blob_name,
+                    account_key=account_key,
+                    permission=BlobSasPermissions(read=True),
+                    expiry=datetime.utcnow() + timedelta(hours=1)  
+                )
+                blob_url = f'https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}?{sas_token}'
+                st.write(f"Download link:  {blob_url}")
+                if str(blob_name).endswith(".pdf"):
+                    connection_string = "your_connection_string"  
+                    blob_service_client = BlobServiceClient.from_connection_string(connect_str)           
+                    download_blob_to_file(blob_service_client, container_name, blob_name, f'./Assets/{blob_name}.png')
+                    displayPDF(f'./Assets/{blob_name}.png')
+                    st.divider()
+                else:
+                    st.image(blob_url, caption='Found Image', width=300)
+                    st.divider()
+            else:
+                st.write(f":red[Human review needed for document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
+                html+=f"<h3>Human review needed document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
+                account_name = 'iaqbrksa'
+                account_key = 'BIbDM4LDLpQKHgpfSG64YwFoMYBK0PbXjgTfRBkIV5hDysP+Dzmgid6Lki7E4nF2fc6byhmaQA4e+ASt09A8HQ=='
+                container_name = 'iaqbrksa'
+                blob_name = resp.payload['source']
+                sas_token = generate_blob_sas(
+                    account_name=account_name,
+                    container_name=container_name,
+                    blob_name=blob_name,
+                    account_key=account_key,
+                    permission=BlobSasPermissions(read=True),
+                    expiry=datetime.utcnow() + timedelta(hours=1)  
+                )
+                blob_url = f'https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}?{sas_token}'
+                st.write(f"Download link:  {blob_url}")
+                if str(blob_name).endswith(".pdf"):
+                    connection_string = "your_connection_string"  
+                    blob_service_client = BlobServiceClient.from_connection_string(connect_str)           
+                    download_blob_to_file(blob_service_client, container_name, blob_name, f'./Assets/{blob_name}.png')
+                    displayPDF(f'./Assets/{blob_name}.png')
+                    st.divider()
+                else:
+                    st.image(blob_url, caption='Found Image', width=300)
+                    st.divider()
+        
         st.markdown('##')
         st.download_button('Download Report', html, file_name='report.html')
         
