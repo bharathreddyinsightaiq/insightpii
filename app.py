@@ -22,8 +22,6 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.models import PointStruct, Payload, VectorParams, Distance
 from openai import OpenAI
 
-
-
 load_dotenv()
 
 # PG Database connection parameters
@@ -66,7 +64,6 @@ COSMOS_KEY=os.getenv("COSMOS_KEY")
 cosmos_client = CosmosClient(url=COSMOS_ENDPOINT, credential=COSMOS_KEY)
 database = cosmos_client.create_database_if_not_exists(id='insightpii')
 
-
 #azure vision 
 vision_key = os.getenv("VISION_KEY")
 vision_endpoint = os.getenv("VISION_ENDPOINT")
@@ -89,7 +86,6 @@ qdrant_client = QdrantClient(
 #OpenAI client
 openai_api_key = os.getenv("OPENAI_KEY")
 client = OpenAI(api_key=openai_api_key)
-
 
 def query_qdrant(query, collection_name, top_k=1):
     # Creates embedding vector from user query
@@ -604,8 +600,126 @@ elif choice == 'Identify Records':
     st.markdown('##')
 
     st.header('Identify an entity across datasets.')
+    st.markdown('##')
     title = st.text_input('Type in a few attributes about the entity you want to find. See an example', 'Johonson White 10932 Brigge road jwhite@domain.com')
+    st.markdown('##')
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        confidence_score_selected = st.slider('How confident do you want to be?', 0, 100, 80)
+    st.markdown('##')
     if st.button("find me"):
-        query_results = query_qdrant(query=title,collection_name='BANKACCOUNT')
-        for i, pii in enumerate(query_results):
-            st.write(f'{i + 1}. {pii.payload["full_text"]} (Score: {round(pii.score, 2)})')
+        st.markdown('##')
+        st.markdown('##')
+        best_matches = {}
+        collections = [x.name for x in qdrant_client.get_collections().collections if x.name != 'unstructured']
+        for collection in collections:
+            response = qdrant_client.search(
+                collection_name=collection,
+                query_vector=get_embedding(title),
+                limit=1,
+                with_payload=True,
+                with_vectors=True,
+            )[0]
+            if response:
+                best_match = response
+                best_matches[collection] = {
+                    "payload": best_match.payload,
+                    "score": best_match.score,
+                    "vector": best_match.vector
+                }
+        highest_score_collection = max(best_matches, key=lambda k: best_matches[k]['score'])
+        for collection in collections:
+            if collection != highest_score_collection:
+                comparison_vector = best_matches[highest_score_collection]['vector']
+                response = qdrant_client.search(
+                    collection_name=collection,
+                    query_vector=comparison_vector,
+                    limit=1,
+                    with_payload=True,
+                    with_vectors=True,
+                )[0]
+                if response:
+                    best_match = response
+                    if best_match.score > best_matches[highest_score_collection]['score']:
+                        highest_score_collection = collection
+                        best_matches[collection] = {
+                            "payload": best_match.payload,
+                            "score": best_match.score,
+                            "vector": best_match.vector
+                        }
+        
+        final_comparison_collection = collections[0] if highest_score_collection != collections[0] else collections[1]
+        comparison_vector = best_matches[highest_score_collection]['vector']
+
+        response = qdrant_client.search(
+            collection_name=final_comparison_collection,
+            query_vector=comparison_vector,
+            limit=1,
+            with_payload=True,
+            with_vectors=True,
+        )[0]
+        if response:
+            best_match = response
+            best_matches[final_comparison_collection] = {
+                "payload": best_match.payload,
+                "score": best_match.score,
+                "vector": best_match.vector
+            }
+
+        full_data={}
+
+        sf_df = populate_sf_data(conn, SNOWFLAKE_RAW_SCHEMA)
+        full_data = full_data | sf_df
+
+        schema_name = 'insightpii_raw'
+        pg_query = f"SELECT table_name FROM information_schema.tables WHERE table_schema = '{schema_name}'"
+        pg_table_names = pd.read_sql(pg_query, engine)
+        tables_dict = {}
+        for table_name in pg_table_names['table_name']:
+            query = f'SELECT * FROM "{schema_name}"."{table_name}"'
+            tables_dict[table_name] = pd.read_sql(query, engine)
+        full_data = full_data | tables_dict
+
+        dataframes_dict = {}
+        for container_properties in database.list_containers():
+            container_name = container_properties['id']
+            container = database.get_container_client(container_name)
+            items = list(container.query_items(
+                query="SELECT * FROM c",
+                enable_cross_partition_query=True
+            ))
+            cleaned_items = [clean_cosmos_item(item) for item in items]
+            df = pd.DataFrame(cleaned_items)
+            dataframes_dict[container_name] = df
+        full_data = full_data | dataframes_dict
+
+        for table in full_data:
+            cols_to_concatenate = full_data[table].columns.difference(['_source'])
+            full_data[table]['_full_text'] = full_data[table][cols_to_concatenate].apply(lambda row: ' '.join(row.values.astype(str)), axis=1)
+        
+        html = '<h1>IDENTIFIED DATA</h1>'
+        
+        for table, content in best_matches.items():
+            if content['score'] > confidence_score_selected/100:
+                st.write(f":green[Found in Database: **{table}**, with confidence of **{content['score']* 100:.2f}%**]")
+            else:
+                st.write(f":red[Needs Human Review for: **{table}**, with confidence of **{content['score']* 100:.2f}%**]")
+            st.dataframe(full_data[table][full_data[table]['_full_text']==content['payload']['full_text']].iloc[:,:-1], hide_index = True)
+            html+=f"<h3> Table:{table} with confidence {content['score']* 100:.2f}% </h3>"
+            html+=pd.DataFrame(full_data[table][full_data[table]['_full_text']==content['payload']['full_text']].iloc[:,:-1]).to_html()
+            html+='<p>----------------------------</p>'
+            st.divider()
+        st.markdown('##')
+        st.download_button('Download Report', html, file_name='report.html')
+        
+
+
+
+
+        
+
+
+
+    
+
+
