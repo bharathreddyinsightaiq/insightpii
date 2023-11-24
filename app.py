@@ -227,7 +227,7 @@ choice = st.sidebar.radio("Choose a page:", pages)
 
 # Page 1 content
 if choice == 'Link Records':
-    st.image("Assets/Images/logo.png", width=400)
+    st.image("Assets/Images/logo.png", width=200)
     st.title('Insight PII')
     st.subheader('PII identification and management solutions')
     st.markdown('##')
@@ -382,7 +382,7 @@ if choice == 'Link Records':
             status.update(label="Qdrant database hydrated.", state="complete", expanded=False)
             
 elif choice == 'Admin Panel':
-    st.image("Assets/Images/logo.png", width=400)
+    st.image("Assets/Images/logo.png", width=200)
     st.title('Insight PII')
     st.subheader('PII identification and management solutions')
     st.markdown('##')
@@ -593,7 +593,7 @@ elif choice == 'Admin Panel':
         neon_delete = st.toggle('Delete Neon data', key="Neon")
 
 elif choice == 'Identify Records':
-    st.image("Assets/Images/logo.png", width=400)
+    st.image("Assets/Images/logo.png", width=200)
     st.title('Insight PII')
     st.subheader('PII identification and management solutions')
     st.markdown('##')
