@@ -19,7 +19,7 @@ from azure.ai.textanalytics import TextAnalyticsClient
 from azure.core.credentials import AzureKeyCredential
 import hashlib
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import PointStruct, Payload, VectorParams, Distance
+from qdrant_client.http.models import PointStruct, Payload, VectorParams, Distance, HnswConfigDiff
 from openai import OpenAI
 from datetime import datetime, timedelta
 import base64
@@ -112,7 +112,7 @@ def get_embedding(text, model="text-embedding-ada-002"):
 
 def entity_recognition(client, documents):
     try:
-        response = client.recognize_entities(documents=documents)
+        response = client.recognize_pii_entities(documents=documents)
         return response
     except Exception as err:
         print("Encountered exception. {}".format(err))
@@ -365,6 +365,11 @@ if choice == 'Link Records':
                     qdrant_client.create_collection(
                         table,
                         vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
+                        hnsw_config=HnswConfigDiff(
+                            m=32,  
+                            ef_construct=400,  
+                            full_scan_threshold=16384,  
+                        )
                     )  
                 if table != 'unstructured':
                     points = [
