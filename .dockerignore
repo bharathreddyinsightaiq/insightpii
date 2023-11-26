@@ -1,5 +1,27 @@
-.gitignore
-.dockerignore
+# poetry files
 pyproject.toml
 poetry.lock
+
+# Git and Terraform files
+.git/
+terraform/
+.gitignore
+.github/workflows/
+
+# Python files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment files
+.env
+
+# Ignore Dockerfile logs
 Dockerfile
+Dockerfile.log
+.dockerignore
+
+
+
+

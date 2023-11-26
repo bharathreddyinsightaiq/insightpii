@@ -1,2 +1,18 @@
+# Environment files
 .env
 
+# Local Terraform directories
+terraform/.terraform/
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/*.tfvars
+terraform/.terraform.lock.hcl
+
+# Ignore Python compiled files and directories
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore Docker build files
+Dockerfile.log

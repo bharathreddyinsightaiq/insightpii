@@ -1,4 +1,4 @@
-name: Docker Build and Push
+name: Docker Build, Push, and Deploy
 
 on:
   push:
@@ -25,3 +25,54 @@ jobs:
         file: ./Dockerfile
         push: true
         tags: insightaiq/insightpii:latest
+
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v1
+
+    - name: 'Login to Azure'
+      uses: azure/login@v1
+      with:
+        creds: |
+          {
+            "clientId": "${{ secrets.ARM_CLIENT_ID }}",
+            "clientSecret": "${{ secrets.ARM_CLIENT_SECRET }}",
+            "subscriptionId": "${{ secrets.ARM_SUBSCRIPTION_ID }}",
+            "tenantId": "${{ secrets.ARM_TENANT_ID }}"
+          }
+
+    - name: Terraform Init and Apply
+      env:
+        ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+        ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+        TF_VAR_subscription_id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+        TF_VAR_tenant_id: ${{ secrets.ARM_TENANT_ID }}
+        ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+        TF_VAR_OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
+        TF_VAR_AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+        TF_VAR_COG_ENDPOINT: ${{ secrets.COG_ENDPOINT }}
+        TF_VAR_: ${{ secrets.COG_KEY }}
+        TF_VAR_COSMOS_ENDPOINT: ${{ secrets.COSMOS_ENDPOINT }}
+        TF_VAR_COSMOS_KEY: ${{ secrets.COSMOS_KEY }}
+        TF_VAR_PG_DB: ${{ secrets.PG_DB }}
+        TF_VAR_PG_HOST: ${{ secrets.PG_HOST }}
+        TF_VAR_PG_PASSWORD: ${{ secrets.PG_PASSWORD }}
+        TF_VAR_PG_PORT: ${{ secrets.PG_PORT }}
+        TF_VAR_PG_USER_NAME: ${{ secrets.PG_USER_NAME }}
+        TF_VAR_QDRANT_ENDPOINT: ${{ secrets.QDRANT_ENDPOINT }}
+        TF_VAR_QDRANT_KEY: ${{ secrets.QDRANT_KEY }}
+        TF_VAR_SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+        TF_VAR_SNOWFLAKE_DATABASE: ${{ secrets.SNOWFLAKE_DATABASE }}
+        TF_VAR_SNOWFLAKE_LINKED_SCHEMA: ${{ secrets.SNOWFLAKE_LINKED_SCHEMA }}
+        TF_VAR_SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+        TF_VAR_SNOWFLAKE_RAW_SCHEMA: ${{ secrets.SNOWFLAKE_RAW_SCHEMA }}
+        TF_VAR_SNOWFLAKE_ROLE: ${{ secrets.SNOWFLAKE_ROLE }}
+        TF_VAR_SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+        TF_VAR_SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
+        TF_VAR_VISION_ENDPOINT: ${{ secrets.VISION_ENDPOINT }}
+        TF_VAR_VISION_KEY: ${{ secrets.VISION_KEY }}
+      
+      run: |
+        cd terraform
+        terraform init
+        terraform apply -auto-approve 
