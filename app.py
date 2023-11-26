@@ -430,12 +430,15 @@ elif choice == 'Data Simulation':
                 schema_name = 'insightpii_raw'
                 query = text(f"SELECT table_name FROM information_schema.tables WHERE table_schema = :schema")
                 with engine.connect() as conn:
+                    transaction = conn.begin()
                     tables = conn.execute(query, {'schema': schema_name}).fetchall()
                     for table in tables:
                         table_name = table[0]
-                        conn.execute(f'DROP TABLE IF EXISTS {schema_name}."{table_name}";')
+                        drop_table_query = text(f'DROP TABLE IF EXISTS "{schema_name}"."{table_name}"')
+                        conn.execute(drop_table_query)
+                        transaction.commit()
                         st.toast(f"Table {table_name} dropped.")
-                status.update(label="Postgresql Raw Schema wiped.", state="complete", expanded=False)
+                status.update(label="Postgresql db wiped.", state="complete", expanded=False)
 
     with tab2:
         st.image("Assets/Images/snowflake.png", width=100)
@@ -519,10 +522,6 @@ elif choice == 'Data Simulation':
                 st.dataframe(editable_df)
             else:
                 st.write(f"red:[Please select the database to persist your data.]")
-
-            
-
-
 
     st.divider()
     st.header('Unstructured Data Sources')
@@ -661,7 +660,7 @@ elif choice == 'Identify Records':
     st.markdown('##')
     col1, col2, col3 = st.columns(3)
     with col1:
-        confidence_score_selected = st.slider('How confident do you want to be?', 0, 100, 80)
+        confidence_score_selected = st.slider('How confident do you want to be?', 75, 100, 80)
     st.markdown('##')
     if st.button("find me"):
         st.markdown('##')
@@ -684,87 +683,91 @@ elif choice == 'Identify Records':
                     "vector": best_match.vector
                 }
         highest_score_collection = max(best_matches, key=lambda k: best_matches[k]['score'])
-        for collection in collections:
-            if collection != highest_score_collection:
-                comparison_vector = best_matches[highest_score_collection]['vector']
-                response = qdrant_client.search(
-                    collection_name=collection,
-                    query_vector=comparison_vector,
-                    limit=1,
-                    with_payload=True,
-                    with_vectors=True,
-                )[0]
-                if response:
-                    best_match = response
-                    if best_match.score > best_matches[highest_score_collection]['score']:
-                        highest_score_collection = collection
-                        best_matches[collection] = {
-                            "payload": best_match.payload,
-                            "score": best_match.score,
-                            "vector": best_match.vector
-                        }
-        
-        final_comparison_collection = collections[0] if highest_score_collection != collections[0] else collections[1]
-        comparison_vector = best_matches[highest_score_collection]['vector']
+        if best_matches[highest_score_collection]['score'] < confidence_score_selected/100:
+            st.write(f':red[No matches found within selected confidence scores.]')
+            html = '<h1>IDENTIFIED DATA</h1>'
+        else: 
+            for collection in collections:
+                if collection != highest_score_collection:
+                    comparison_vector = best_matches[highest_score_collection]['vector']
+                    response = qdrant_client.search(
+                        collection_name=collection,
+                        query_vector=comparison_vector,
+                        limit=1,
+                        with_payload=True,
+                        with_vectors=True,
+                    )[0]
+                    if response:
+                        best_match = response
+                        if best_match.score > best_matches[highest_score_collection]['score']:
+                            highest_score_collection = collection
+                            best_matches[collection] = {
+                                "payload": best_match.payload,
+                                "score": best_match.score,
+                                "vector": best_match.vector
+                            }
+            
+            final_comparison_collection = collections[0] if highest_score_collection != collections[0] else collections[1]
+            comparison_vector = best_matches[highest_score_collection]['vector']
 
-        response = qdrant_client.search(
-            collection_name=final_comparison_collection,
-            query_vector=comparison_vector,
-            limit=1,
-            with_payload=True,
-            with_vectors=True,
-        )[0]
-        if response:
-            best_match = response
-            best_matches[final_comparison_collection] = {
-                "payload": best_match.payload,
-                "score": best_match.score,
-                "vector": best_match.vector
-            }
+            response = qdrant_client.search(
+                collection_name=final_comparison_collection,
+                query_vector=comparison_vector,
+                limit=1,
+                with_payload=True,
+                with_vectors=True,
+            )[0]
+            if response:
+                best_match = response
+                best_matches[final_comparison_collection] = {
+                    "payload": best_match.payload,
+                    "score": best_match.score,
+                    "vector": best_match.vector
+                }
 
-        full_data={}
+            full_data={}
 
-        sf_df = populate_sf_data(conn, SNOWFLAKE_RAW_SCHEMA)
-        full_data = full_data | sf_df
+            sf_df = populate_sf_data(conn, SNOWFLAKE_RAW_SCHEMA)
+            full_data = full_data | sf_df
 
-        schema_name = 'insightpii_raw'
-        pg_query = f"SELECT table_name FROM information_schema.tables WHERE table_schema = '{schema_name}'"
-        pg_table_names = pd.read_sql(pg_query, engine)
-        tables_dict = {}
-        for table_name in pg_table_names['table_name']:
-            query = f'SELECT * FROM "{schema_name}"."{table_name}"'
-            tables_dict[table_name] = pd.read_sql(query, engine)
-        full_data = full_data | tables_dict
+            schema_name = 'insightpii_raw'
+            pg_query = f"SELECT table_name FROM information_schema.tables WHERE table_schema = '{schema_name}'"
+            pg_table_names = pd.read_sql(pg_query, engine)
+            tables_dict = {}
+            for table_name in pg_table_names['table_name']:
+                query = f'SELECT * FROM "{schema_name}"."{table_name}"'
+                tables_dict[table_name] = pd.read_sql(query, engine)
+            full_data = full_data | tables_dict
 
-        dataframes_dict = {}
-        for container_properties in database.list_containers():
-            container_name = container_properties['id']
-            container = database.get_container_client(container_name)
-            items = list(container.query_items(
-                query="SELECT * FROM c",
-                enable_cross_partition_query=True
-            ))
-            cleaned_items = [clean_cosmos_item(item) for item in items]
-            df = pd.DataFrame(cleaned_items)
-            dataframes_dict[container_name] = df
-        full_data = full_data | dataframes_dict
+            dataframes_dict = {}
+            for container_properties in database.list_containers():
+                container_name = container_properties['id']
+                container = database.get_container_client(container_name)
+                items = list(container.query_items(
+                    query="SELECT * FROM c",
+                    enable_cross_partition_query=True
+                ))
+                cleaned_items = [clean_cosmos_item(item) for item in items]
+                df = pd.DataFrame(cleaned_items)
+                dataframes_dict[container_name] = df
+            full_data = full_data | dataframes_dict
 
-        for table in full_data:
-            cols_to_concatenate = full_data[table].columns.difference(['_source'])
-            full_data[table]['_full_text'] = full_data[table][cols_to_concatenate].apply(lambda row: ' '.join(row.values.astype(str)), axis=1)
-        
-        html = '<h1>IDENTIFIED DATA</h1>'
-        
-        for table, content in best_matches.items():
-            if content['score'] > confidence_score_selected/100:
-                st.write(f":green[Found in Database: **{table}**, with confidence of **{content['score']* 100:.2f}%**]")
-            else:
-                st.write(f":red[Needs Human Review for: **{table}**, with confidence of **{content['score']* 100:.2f}%**]")
-            st.dataframe(full_data[table][full_data[table]['_full_text']==content['payload']['full_text']].iloc[:,:-1], hide_index = True)
-            html+=f"<h3> Table:{table} with confidence {content['score']* 100:.2f}% </h3>"
-            html+=pd.DataFrame(full_data[table][full_data[table]['_full_text']==content['payload']['full_text']].iloc[:,:-1]).to_html()
-            html+='<p>----------------------------</p>'
-            st.divider()
+            for table in full_data:
+                cols_to_concatenate = full_data[table].columns.difference(['_source'])
+                full_data[table]['_full_text'] = full_data[table][cols_to_concatenate].apply(lambda row: ' '.join(row.values.astype(str)), axis=1)
+            
+            html = '<h1>IDENTIFIED DATA</h1>'
+            
+            for table, content in best_matches.items():
+                if content['score'] > confidence_score_selected/100:
+                    st.write(f":green[Found in Database: **{table}**, with confidence of **{content['score']* 100:.2f}%**]")
+                else:
+                    st.write(f":red[Needs Human Review for: **{table}**, with confidence of **{content['score']* 100:.2f}%**]")
+                st.dataframe(full_data[table][full_data[table]['_full_text']==content['payload']['full_text']].iloc[:,:-1], hide_index = True)
+                html+=f"<h3> Table:{table} with confidence {content['score']* 100:.2f}% </h3>"
+                html+=pd.DataFrame(full_data[table][full_data[table]['_full_text']==content['payload']['full_text']].iloc[:,:-1]).to_html()
+                html+='<p>----------------------------</p>'
+                st.divider()
 
         us_response = qdrant_client.search(
                 collection_name='unstructured',
@@ -794,15 +797,16 @@ elif choice == 'Identify Records':
                 blob_url = f'https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}?{sas_token}'
                 st.write(f"Download link:  {blob_url}")
                 if str(blob_name).endswith(".pdf"):
+                    file_name = str(blob_name).split(".pdf")[0]
                     connection_string = "your_connection_string"  
                     blob_service_client = BlobServiceClient.from_connection_string(connect_str)           
-                    download_blob_to_file(blob_service_client, container_name, blob_name, f'./Assets/{blob_name}.png')
-                    displayPDF(f'./Assets/{blob_name}.png')
+                    download_blob_to_file(blob_service_client, container_name, blob_name, f'./Assets/{file_name}.png')
+                    displayPDF(f'./Assets/{file_name}.png')
                     st.divider()
                 else:
                     st.image(blob_url, caption='Found Image', width=300)
                     st.divider()
-            else:
+            elif resp.score * 100 > confidence_score_selected + 3:
                 st.write(f":red[Human review needed for document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
                 html+=f"<h3>Human review needed document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
                 account_name = 'iaqbrksa'
@@ -820,10 +824,38 @@ elif choice == 'Identify Records':
                 blob_url = f'https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}?{sas_token}'
                 st.write(f"Download link:  {blob_url}")
                 if str(blob_name).endswith(".pdf"):
+                    file_name = str(blob_name).split(".pdf")[0]
                     connection_string = "your_connection_string"  
                     blob_service_client = BlobServiceClient.from_connection_string(connect_str)           
-                    download_blob_to_file(blob_service_client, container_name, blob_name, f'./Assets/{blob_name}.png')
-                    displayPDF(f'./Assets/{blob_name}.png')
+                    download_blob_to_file(blob_service_client, container_name, blob_name, f'./Assets/{file_name}.png')
+                    displayPDF(f'./Assets/{file_name}.png')
+                    st.divider()
+                else:
+                    st.image(blob_url, caption='Found Image', width=300)
+                    st.divider()
+            else:
+                st.write(f":red[Fringe Match for document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
+                html+=f"<h3>Fringe Matched on document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
+                account_name = 'iaqbrksa'
+                account_key = 'BIbDM4LDLpQKHgpfSG64YwFoMYBK0PbXjgTfRBkIV5hDysP+Dzmgid6Lki7E4nF2fc6byhmaQA4e+ASt09A8HQ=='
+                container_name = 'iaqbrksa'
+                blob_name = resp.payload['source']
+                sas_token = generate_blob_sas(
+                    account_name=account_name,
+                    container_name=container_name,
+                    blob_name=blob_name,
+                    account_key=account_key,
+                    permission=BlobSasPermissions(read=True),   
+                    expiry=datetime.utcnow() + timedelta(hours=1)  
+                )
+                blob_url = f'https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}?{sas_token}'
+                st.write(f"Download link:  {blob_url}")
+                if str(blob_name).endswith(".pdf"):
+                    file_name = str(blob_name).split(".pdf")[0]
+                    connection_string = "your_connection_string"  
+                    blob_service_client = BlobServiceClient.from_connection_string(connect_str)           
+                    download_blob_to_file(blob_service_client, container_name, blob_name, f'./Assets/{file_name}.png')
+                    displayPDF(f'./Assets/{file_name}.png')
                     st.divider()
                 else:
                     st.image(blob_url, caption='Found Image', width=300)
