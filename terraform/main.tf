@@ -38,7 +38,7 @@ resource "azurerm_key_vault" "insightpii-kv" {
     object_id = data.azurerm_client_config.current.object_id
 
     key_permissions = [
-      "Get", "List", "Set", "Delete", "Recover", "Backup", "Restore"
+      "Get", "List", "Create", "Delete", "Recover", "Backup", "Restore"
     ]
 
     secret_permissions = [
@@ -53,7 +53,7 @@ resource "azurerm_key_vault" "insightpii-kv" {
 
 # Key Vault Secrets
 resource "azurerm_key_vault_secret" "openai_key" {
-  name         = "OPENAI_KEY"
+  name         = "OPENAI-KEY"
   value        = var.OPENAI_KEY
   key_vault_id = azurerm_key_vault.insightpii-kv.id
 }
@@ -64,16 +64,36 @@ resource "azurerm_container_group" "container" {
   location            = azurerm_resource_group.insightpii-rg.location
   resource_group_name = azurerm_resource_group.insightpii-rg.name
   os_type             = "Linux"
+  
+  image_registry_credential {
+    server   = "docker.io"
+    username = var.docker_username
+    password = var.docker_password
+  }
+
   container {
     name   = "insightpii"
     image  = "insightaiq/insightpii:latest"
     cpu    = "1"
     memory = "1.5"
 
+    ports {
+      port     = 8501
+      protocol = "TCP"
+    }
+
     # Environment variables from Key Vault
     secure_environment_variables = {
-      OPENAI_KEY = azurerm_key_vault_secret.openai_key["OPENAI_KEY"].value
+      OPENAI_KEY = azurerm_key_vault_secret.openai_key.value
       # ... other environment variables ...
+    }
+  }
+  # Assign a public IP address to the container group
+  ip_address {
+    type = "Public"
+    ports {
+      port     = 8501
+      protocol = "TCP"
     }
   }
 }

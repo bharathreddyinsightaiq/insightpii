@@ -123,7 +123,12 @@ variable "VISION_KEY" {
   type        = string
 }
 
-variable "secrets" {
-  description = "A map of secrets to store in Key Vault"
-  type        = map(string)
+variable "docker_username" {
+  description = "Docker Hub Username"
+  type        = string
+}
+
+variable "docker_password" {
+  description = "Docker Hub Password"
+  type        = string
 }
