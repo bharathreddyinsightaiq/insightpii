@@ -140,7 +140,7 @@ resource "azurerm_key_vault_secret" "PG_USER_NAME" {
 }
 
 resource "azurerm_key_vault_secret" "PG_PASSWORD" {
-  name         = "PG_PASSWORD"
+  name         = "PG-PASSWORD"
   value        = var.PG_PASSWORD
   key_vault_id = azurerm_key_vault.insightpii-kv.id
 }
