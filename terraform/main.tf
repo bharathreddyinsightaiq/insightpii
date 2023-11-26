@@ -64,7 +64,9 @@ resource "azurerm_container_group" "container" {
   location            = azurerm_resource_group.insightpii-rg.location
   resource_group_name = azurerm_resource_group.insightpii-rg.name
   os_type             = "Linux"
-  
+  ip_address_type     = "Public"
+  dns_name_label      = "insightpii-label"
+
   image_registry_credential {
     server   = "docker.io"
     username = var.docker_username
@@ -86,14 +88,6 @@ resource "azurerm_container_group" "container" {
     secure_environment_variables = {
       OPENAI_KEY = azurerm_key_vault_secret.openai_key.value
       # ... other environment variables ...
-    }
-  }
-  # Assign a public IP address to the container group
-  ip_address {
-    type = "Public"
-    ports {
-      port     = 8501
-      protocol = "TCP"
     }
   }
 }
