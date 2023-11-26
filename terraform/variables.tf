@@ -7,6 +7,14 @@ variable "subscription_id" {
   type        = string
 }
 
+variable "client_id" {
+  description = "Azure client ID"
+}
+
+variable "client_secret" {
+  description = "Azure client_secret"
+  type        = string
+}
 
 variable "OPENAI_KEY" {
   description = "OpenAI API Key"
