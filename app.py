@@ -430,7 +430,7 @@ elif choice == 'Data Simulation':
                 schema_name = 'insightpii_raw'
                 query = text(f"SELECT table_name FROM information_schema.tables WHERE table_schema = :schema")
                 with engine.connect() as conn:
-                    tables = conn.execute(query, schema=schema_name).fetchall()
+                    tables = conn.execute(query, {'schema': schema_name}).fetchall()
                     for table in tables:
                         table_name = table[0]
                         conn.execute(f'DROP TABLE IF EXISTS {schema_name}."{table_name}";')
