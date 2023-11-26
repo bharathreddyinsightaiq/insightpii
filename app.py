@@ -231,7 +231,7 @@ def download_blob_to_file(blob_service_client, container_name, blob_name, file_p
 
 # Page setup
 st.set_page_config(page_title="InsightAIQ", layout="wide")
-pages = ['Link Records', 'Identify Records', 'Delete Records', 'Admin Panel']
+pages = ['Link Records', 'Identify Records', 'Delete Records', 'Data Simulation']
 choice = st.sidebar.radio("Choose a page:", pages)
 
 # Page 1 content
@@ -260,7 +260,7 @@ if choice == 'Link Records':
             st.markdown('##')
             st.metric(label="Snowflake", value=f"{len(sf_df)} Tables", delta=f"{sum(len(df) for df in sf_df.values())} Rows")
     with col2:
-        st.image("Assets/Images/Postgres.png", width=100)
+        st.image("Assets/Images/postgres.png", width=100)
         pg = st.checkbox('Postgres',key='pg_check')
         if pg:
             schema_name = 'insightpii_raw'
@@ -294,7 +294,7 @@ if choice == 'Link Records':
                     for doc in result:
                         if not doc.is_error:
                             for entity in doc.entities:
-                                entities_info += f"{entity.text}"
+                                entities_info += f" {entity.text}"
                 updated_text = entities_info
                 temp_df_azure = pd.concat([temp_df_azure,pd.DataFrame({'text': [updated_text], '_source': blob.name})], ignore_index=True)
                 extracted_text_dict['unstructured'] = temp_df_azure
@@ -395,7 +395,7 @@ if choice == 'Link Records':
                 st.toast(f"{table} data vectors uploaded to qdrant.")
             status.update(label="Qdrant database hydrated.", state="complete", expanded=False)
             
-elif choice == 'Admin Panel':
+elif choice == 'Data Simulation':
     st.image("Assets/Images/logo.png", width=200)
     st.title('Insight PII')
     st.subheader('PII identification and management solutions')
@@ -407,10 +407,10 @@ elif choice == 'Admin Panel':
     st.markdown('##')
 
     st.header('Strcutured Data Sources')
-    tab1, tab2, tab3, tab4 = st.tabs(["Postgres", "Snowflake", "BigQuery", "Redshift"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Postgres", "Snowflake", "BigQuery", "Redshift", "Bring Your Data"])
 
     with tab1:
-        st.image("Assets/Images/Postgres.png", width=100)
+        st.image("Assets/Images/postgres.png", width=100)
         st.subheader("Postgresql Database")
         uploaded_files = st.file_uploader("Drag and drop CSV files or select files.", type=["csv"],
                                         accept_multiple_files=True, key='pg_upload')
@@ -484,6 +484,44 @@ elif choice == 'Admin Panel':
                                         accept_multiple_files=True, key='rs_upload')
         st.markdown('##')
         redshift_raw_delete = st.toggle('Delete Redshift data', key="rs_raw")
+
+    with tab5:
+
+        byod = pd.DataFrame({
+            'Patient_Name': ['Name 1', 'Name 2', 'Name 3'],
+            'Patient_Address': ['Address 1', 'Address 2', 'Address 3'],
+            'Patient_emailid':['email1@gmail.com','email2@gmail.com','email3@org1.com'],
+            'Diagnosis_code':['code1','code2','code3'],
+            'Toal_bill': [1,2,3]
+        })
+        # if 'original_boyd' not in st.session_state:
+        #     st.session_state['original_boyd'] = byod.copy()   
+        st.subheader("Bring Your Own Data")
+        editable_df = st.data_editor(byod,num_rows="dynamic",hide_index=True)
+        editable_df.dropna(axis=0, inplace=True)
+        col1, col2 = st.columns(2)
+        with col1: 
+            upload_option = st.selectbox(
+            'Where would you like to upload this data?',
+            ('Snowflake', 'Postgres', 'Cosmos'))
+
+        if st.button("Process this data"):
+            if upload_option == "Snowflake":
+                st.write(upload_option)
+                st.dataframe(editable_df)
+            
+            elif upload_option == "Postgres":
+                st.write(upload_option)
+                st.dataframe(editable_df)
+
+            elif upload_option == "Cosmos":
+                
+                st.dataframe(editable_df)
+            else:
+                st.write(f"red:[Please select the database to persist your data.]")
+
+            
+
 
 
     st.divider()
@@ -734,11 +772,11 @@ elif choice == 'Identify Records':
                 limit=10,
                 with_payload=True,
                 with_vectors=True,
-                score_threshold=.75,
+                score_threshold=confidence_score_selected/100,
             )
-
+        
         for resp in us_response:
-            if resp.score > confidence_score_selected/100:
+            if resp.score * 100 > confidence_score_selected + 3:
                 st.write(f":green[Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
                 html+=f"<h3>Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
                 account_name = 'iaqbrksa'
@@ -776,7 +814,7 @@ elif choice == 'Identify Records':
                     container_name=container_name,
                     blob_name=blob_name,
                     account_key=account_key,
-                    permission=BlobSasPermissions(read=True),
+                    permission=BlobSasPermissions(read=True),   
                     expiry=datetime.utcnow() + timedelta(hours=1)  
                 )
                 blob_url = f'https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}?{sas_token}'

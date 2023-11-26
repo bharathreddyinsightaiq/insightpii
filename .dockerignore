@@ -1,3 +1,5 @@
-.env
 .gitignore
 .dockerignore
+pyproject.toml
+poetry.lock
+Dockerfile
