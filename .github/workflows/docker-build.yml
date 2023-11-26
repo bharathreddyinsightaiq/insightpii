@@ -74,7 +74,7 @@ jobs:
         TF_VAR_VISION_ENDPOINT: ${{ secrets.VISION_ENDPOINT }}
         TF_VAR_VISION_KEY: ${{ secrets.VISION_KEY }}
         TF_VAR_docker_username: ${{ secrets.DOCKER_HUB_USERNAME }}
-        TF_VAR_docker_password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+        TF_VAR_docker_password: ${{ secrets.DOCKER_PAT }}
       
       run: |
         cd terraform
