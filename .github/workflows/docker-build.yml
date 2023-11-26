@@ -51,7 +51,7 @@ jobs:
         TF_VAR_OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
         TF_VAR_AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
         TF_VAR_COG_ENDPOINT: ${{ secrets.COG_ENDPOINT }}
-        TF_VAR_: ${{ secrets.COG_KEY }}
+        TF_VAR_COG_KEY: ${{ secrets.COG_KEY }}
         TF_VAR_COSMOS_ENDPOINT: ${{ secrets.COSMOS_ENDPOINT }}
         TF_VAR_COSMOS_KEY: ${{ secrets.COSMOS_KEY }}
         TF_VAR_PG_DB: ${{ secrets.PG_DB }}
@@ -71,6 +71,8 @@ jobs:
         TF_VAR_SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
         TF_VAR_VISION_ENDPOINT: ${{ secrets.VISION_ENDPOINT }}
         TF_VAR_VISION_KEY: ${{ secrets.VISION_KEY }}
+        TF_VAR_docker_username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        TF_VAR_docker_password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
       
       run: |
         cd terraform
