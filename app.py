@@ -59,7 +59,7 @@ conn.cursor().execute(f"USE SCHEMA {SNOWFLAKE_RAW_SCHEMA}")
 
 #Azure SA
 connect_str = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
-
+azure_storage_access_key = os.getenv('AZURE_ACCESS_KEY')
 #CososDB
 COSMOS_ENDPOINT=os.getenv("COSMOS_ENDPOINT")
 COSMOS_KEY=os.getenv("COSMOS_KEY")
@@ -88,6 +88,17 @@ qdrant_client = QdrantClient(
 #OpenAI client
 openai_api_key = os.getenv("OPENAI_KEY")
 client = OpenAI(api_key=openai_api_key)
+
+def get_sas_token(account_name, container_name, blob_name, account_key=azure_storage_access_key):
+    sas_token = generate_blob_sas(
+        account_name=account_name,
+        container_name=container_name,
+        blob_name=blob_name,
+        account_key=account_key,
+        permission=BlobSasPermissions(read=True),
+        expiry=datetime.utcnow() + timedelta(hours=1)  
+    )
+    return f'https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}?{sas_token}'
 
 def query_qdrant(query, collection_name, top_k=1):
     # Creates embedding vector from user query
@@ -276,11 +287,11 @@ if choice == 'Link Records':
             st.markdown('##')
             st.metric(label="Postgres", value=f"{len(tables_dict)} Tables", delta=f"{sum(len(df) for df in tables_dict.values())} Rows")
     with col3:
-        st.image("Assets/Images/azuresa.png", width=100)
+        st.image("Assets/Images/adls.png", width=145)
         sa = st.checkbox('Azure Storage',key='sa_check')
         if sa:
             blob_service_client = BlobServiceClient.from_connection_string(connect_str)
-            container_client = blob_service_client.get_container_client(container="iaqbrksa")
+            container_client = blob_service_client.get_container_client(container="adls")
             extracted_text_dict = {}
             temp_df_azure = pd.DataFrame(columns=['text','source'])
             for blob in container_client.list_blobs():
@@ -302,35 +313,12 @@ if choice == 'Link Records':
             st.markdown('##') 
             st.write('Azure Storage data loaded.')
             st.markdown('##')
-            st.metric(label="AzureSA", value=f"{len(extracted_text_dict)} Tables", delta=f"{sum(len(df) for df in extracted_text_dict.values())} Rows")
+            st.metric(label="ADLS", value=f"{len(extracted_text_dict)} Tables", delta=f"{sum(len(df) for df in extracted_text_dict.values())} Rows")
     with col4:
-        st.image("Assets/Images/adls.png", width=150)
-        adls = st.checkbox('ADLS gen2',key='adls_check')
-        if adls:
-            blob_service_client = BlobServiceClient.from_connection_string(connect_str)
-            container_client = blob_service_client.get_container_client(container="adlsg2")
-            extracted_text_dict_adls = {}
-            temp_df_adls = pd.DataFrame(columns=['text','source'])
-            for blob in container_client.list_blobs():
-                blob_client = container_client.get_blob_client(blob)
-                blob_content = read_blob(blob_client)
-                extracted_text = extract_text_from_image(blob_content)
-                documents = [extracted_text]
-                result = entity_recognition(text_analytics_client, documents)
-                entities_info = ""
-                if result:
-                    for doc in result:
-                        if not doc.is_error:
-                            for entity in doc.entities:
-                                entities_info += f"{entity.text}"
-                updated_text = entities_info
-                temp_df_adls = pd.concat([temp_df_adls,pd.DataFrame({'text': [updated_text], '_source': blob.name})], ignore_index=True)
-                extracted_text_dict['unstructured'] = temp_df_adls
-            full_data = full_data | extracted_text_dict  
-            st.markdown('##')
-            st.write('ADLS gen2 data loaded.')
-            st.markdown('##')
-            st.metric(label="ADLS", value=f"{len(extracted_text_dict_adls)} Tables", delta=f"{sum(len(df) for df in extracted_text_dict_adls.values())} Rows")
+        st.image("Assets/Images/s3.png", width=135)
+        s3 = st.checkbox('s3',key='s3_check')
+        if s3:
+            pass
     with col5:
         st.image("Assets/Images/cosmos.png", width=100)
         cdb = st.checkbox('CosmosDb',key='cdb_check')
@@ -394,6 +382,7 @@ if choice == 'Link Records':
                     qdrant_client.upsert(collection_name=table, points=points)                    
                 st.toast(f"{table} data vectors uploaded to qdrant.")
             status.update(label="Qdrant database hydrated.", state="complete", expanded=False)
+        st.write(full_data)
             
 elif choice == 'Data Simulation':
     st.image("Assets/Images/logo.png", width=200)
@@ -525,17 +514,17 @@ elif choice == 'Data Simulation':
 
     st.divider()
     st.header('Unstructured Data Sources')
-    tab1, tab2, tab3 = st.tabs(["Azure Storage", "ADLS", "Cosmos"])
+    tab1, tab2, tab3 = st.tabs(["ADLS", "S3", "Cosmos"])
 
     with tab1:  
-        st.image("Assets/Images/azuresa.png", width=100)
-        st.subheader("Azure Storage Containers.")
+        st.image("Assets/Images/adls.png", width=100)
+        st.subheader("Azure Data Lake Storage gen2.")
         image_files = st.file_uploader("Drag and drop files or select files", accept_multiple_files=True, key='azure_sa_upload')
         if image_files:
             if st.button(f"Upload All files", key='azure_sa_upload_btn'):
                 for image_file in image_files:
                     blob_service_client = BlobServiceClient.from_connection_string(connect_str)
-                    blob_client = blob_service_client.get_blob_client(container="iaqbrksa", blob=image_file)
+                    blob_client = blob_service_client.get_blob_client(container="adls", blob=image_file)
                     blob_client.upload_blob(image_file, overwrite=True)
                     st.toast(f"{image_file.name} uploaded successfully!")
                 st.success("All files uploaded.")
@@ -544,38 +533,40 @@ elif choice == 'Data Simulation':
         if azuresa_delete:
             with st.status("Deleting Azure Storage data...", expanded=True) as status:
                 blob_service_client = BlobServiceClient.from_connection_string(connect_str)
-                container_client = blob_service_client.get_container_client('iaqbrksa')
+                container_client = blob_service_client.get_container_client('adls')
                 blob_list = container_client.list_blobs()
                 for blob in blob_list:
-                    blob_client = blob_service_client.get_blob_client(container='iaqbrksa', blob=blob.name)
+                    blob_client = blob_service_client.get_blob_client(container='adls', blob=blob.name)
                     blob_client.delete_blob(delete_snapshots='include')
                     st.toast(f'{blob.name} deleted from Azure container.')
                 status.update(label="Azure Storage wiped clean", state="complete", expanded=False)
 
-    with tab2:  
-        st.image("Assets/Images/adls.png", width=130)
-        st.subheader("Azure DataLake Storage Gen2")
+    with tab2: 
+        # Remove references of adls and change to s3  
+        st.image("Assets/Images/s3.png", width=130)
+        st.subheader("AWS S3 buckets")
         image_files = st.file_uploader("Drag and drop files or select files", accept_multiple_files=True, key='adls_upload')
-        if image_files:
-            if st.button(f"Upload All files", key='adls_sa_upload_btn'):
-                for image_file in image_files:
-                    blob_service_client = BlobServiceClient.from_connection_string(connect_str)
-                    blob_client = blob_service_client.get_blob_client(container="adlsg2", blob=image_file)
-                    blob_client.upload_blob(image_file, overwrite=True)
-                    st.toast(f"{image_file.name} uploaded successfully!")
-                st.success("All files uploaded.")
+        # if image_files:
+        #     if st.button(f"Upload All files", key='adls_sa_upload_btn'):
+        #         for image_file in image_files:
+        #             blob_service_client = BlobServiceClient.from_connection_string(connect_str)
+        #             blob_client = blob_service_client.get_blob_client(container="adlsg2", blob=image_file)
+        #             blob_client.upload_blob(image_file, overwrite=True)
+        #             st.toast(f"{image_file.name} uploaded successfully!")
+        #         st.success("All files uploaded.")
         st.markdown('##')
-        adls_delete = st.toggle('Delete ADLS data', key="adls_del")
+        adls_delete = st.toggle('Delete S3 data', key="adls_del")
         if adls_delete:
-            with st.status("Deleting ADLS data...", expanded=True) as status:
-                blob_service_client = BlobServiceClient.from_connection_string(connect_str)
-                container_client = blob_service_client.get_container_client('adlsg2')
-                blob_list = container_client.list_blobs()
-                for blob in blob_list:
-                    blob_client = blob_service_client.get_blob_client(container='adlsg2', blob=blob.name)
-                    blob_client.delete_blob(delete_snapshots='include')
-                    st.toast(f'{blob.name} deleted from ADLS gen2.')
-                status.update(label="ADLS gen2 wiped clean", state="complete", expanded=False)
+            pass
+            # with st.status("Deleting ADLS data...", expanded=True) as status:
+            #     blob_service_client = BlobServiceClient.from_connection_string(connect_str)
+            #     container_client = blob_service_client.get_container_client('adlsg2')
+            #     blob_list = container_client.list_blobs()
+            #     for blob in blob_list:
+            #         blob_client = blob_service_client.get_blob_client(container='adlsg2', blob=blob.name)
+            #         blob_client.delete_blob(delete_snapshots='include')
+            #         st.toast(f'{blob.name} deleted from ADLS gen2.')
+            #     status.update(label="ADLS gen2 wiped clean", state="complete", expanded=False)
 
     with tab3:
         st.image("Assets/Images/cosmos.png", width=100)
@@ -779,87 +770,31 @@ elif choice == 'Identify Records':
             )
         
         for resp in us_response:
-            if resp.score * 100 > confidence_score_selected + 3:
+            if resp.score * 100 > confidence_score_selected + 5:
                 st.write(f":green[Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
                 html+=f"<h3>Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
-                account_name = 'iaqbrksa'
-                account_key = 'BIbDM4LDLpQKHgpfSG64YwFoMYBK0PbXjgTfRBkIV5hDysP+Dzmgid6Lki7E4nF2fc6byhmaQA4e+ASt09A8HQ=='
-                container_name = 'iaqbrksa'
-                blob_name = resp.payload['source']
-                sas_token = generate_blob_sas(
-                    account_name=account_name,
-                    container_name=container_name,
-                    blob_name=blob_name,
-                    account_key=account_key,
-                    permission=BlobSasPermissions(read=True),
-                    expiry=datetime.utcnow() + timedelta(hours=1)  
-                )
-                blob_url = f'https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}?{sas_token}'
-                st.write(f"Download link:  {blob_url}")
-                if str(blob_name).endswith(".pdf"):
-                    file_name = str(blob_name).split(".pdf")[0]
-                    connection_string = "your_connection_string"  
-                    blob_service_client = BlobServiceClient.from_connection_string(connect_str)           
-                    download_blob_to_file(blob_service_client, container_name, blob_name, f'./Assets/{file_name}.png')
-                    displayPDF(f'./Assets/{file_name}.png')
-                    st.divider()
-                else:
-                    st.image(blob_url, caption='Found Image', width=300)
-                    st.divider()
             elif resp.score * 100 > confidence_score_selected + 3:
                 st.write(f":red[Human review needed for document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
                 html+=f"<h3>Human review needed document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
-                account_name = 'iaqbrksa'
-                account_key = 'BIbDM4LDLpQKHgpfSG64YwFoMYBK0PbXjgTfRBkIV5hDysP+Dzmgid6Lki7E4nF2fc6byhmaQA4e+ASt09A8HQ=='
-                container_name = 'iaqbrksa'
-                blob_name = resp.payload['source']
-                sas_token = generate_blob_sas(
-                    account_name=account_name,
-                    container_name=container_name,
-                    blob_name=blob_name,
-                    account_key=account_key,
-                    permission=BlobSasPermissions(read=True),   
-                    expiry=datetime.utcnow() + timedelta(hours=1)  
-                )
-                blob_url = f'https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}?{sas_token}'
-                st.write(f"Download link:  {blob_url}")
-                if str(blob_name).endswith(".pdf"):
-                    file_name = str(blob_name).split(".pdf")[0]
-                    connection_string = "your_connection_string"  
-                    blob_service_client = BlobServiceClient.from_connection_string(connect_str)           
-                    download_blob_to_file(blob_service_client, container_name, blob_name, f'./Assets/{file_name}.png')
-                    displayPDF(f'./Assets/{file_name}.png')
-                    st.divider()
-                else:
-                    st.image(blob_url, caption='Found Image', width=300)
-                    st.divider()
             else:
                 st.write(f":red[Fringe Match for document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
                 html+=f"<h3>Fringe Matched on document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
-                account_name = 'iaqbrksa'
-                account_key = 'BIbDM4LDLpQKHgpfSG64YwFoMYBK0PbXjgTfRBkIV5hDysP+Dzmgid6Lki7E4nF2fc6byhmaQA4e+ASt09A8HQ=='
-                container_name = 'iaqbrksa'
-                blob_name = resp.payload['source']
-                sas_token = generate_blob_sas(
-                    account_name=account_name,
-                    container_name=container_name,
-                    blob_name=blob_name,
-                    account_key=account_key,
-                    permission=BlobSasPermissions(read=True),   
-                    expiry=datetime.utcnow() + timedelta(hours=1)  
-                )
-                blob_url = f'https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}?{sas_token}'
-                st.write(f"Download link:  {blob_url}")
-                if str(blob_name).endswith(".pdf"):
-                    file_name = str(blob_name).split(".pdf")[0]
-                    connection_string = "your_connection_string"  
-                    blob_service_client = BlobServiceClient.from_connection_string(connect_str)           
-                    download_blob_to_file(blob_service_client, container_name, blob_name, f'./Assets/{file_name}.png')
-                    displayPDF(f'./Assets/{file_name}.png')
-                    st.divider()
-                else:
-                    st.image(blob_url, caption='Found Image', width=300)
-                    st.divider()
+
+            account_name = 'insightunstructured'
+            container_name = 'adls'
+            blob_name = resp.payload['source']
+            blob_url = get_sas_token(account_name=account_name, container_name=container_name, blob_name=blob_name)
+            st.write(f"Download link:  {blob_url}")
+            if str(blob_name).endswith(".pdf"):
+                file_name = str(blob_name).split(".pdf")[0]
+                blob_service_client = BlobServiceClient.from_connection_string(connect_str)           
+                download_blob_to_file(blob_service_client, container_name, blob_name, f'./Assets/{file_name}.png')
+                displayPDF(f'./Assets/{file_name}.png')
+                st.divider()
+            else:
+                st.image(blob_url, caption='Found Image', width=300)
+                st.divider()
+            
         
         st.markdown('##')
         st.download_button('Download Report', html, file_name='report.html')
