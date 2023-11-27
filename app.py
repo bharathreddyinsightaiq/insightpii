@@ -44,7 +44,7 @@ SNOWFLAKE_DATABASE = os.getenv("SNOWFLAKE_DATABASE")
 SNOWFLAKE_RAW_SCHEMA = os.getenv("SNOWFLAKE_RAW_SCHEMA")
 SNOWFLAKE_ROLE = os.getenv("SNOWFLAKE_ROLE")
 SNOWFLAKE_LINKED_SCHEMA=os.getenv("SNOWFLAKE_LINKED_SCHEMA")
-conn = snowflake.connector.connect(
+sf_conn = snowflake.connector.connect(
     user=SNOWFLAKE_USER,
     password=SNOWFLAKE_PASSWORD,
     account=SNOWFLAKE_ACCOUNT,
@@ -52,10 +52,10 @@ conn = snowflake.connector.connect(
     database=SNOWFLAKE_DATABASE,
     schema=SNOWFLAKE_RAW_SCHEMA
 )
-conn.cursor().execute(f"USE ROLE {SNOWFLAKE_ROLE}")
-conn.cursor().execute(f"USE WAREHOUSE {SNOWFLAKE_WAREHOUSE}")
-conn.cursor().execute(f"USE DATABASE {SNOWFLAKE_DATABASE}")
-conn.cursor().execute(f"USE SCHEMA {SNOWFLAKE_RAW_SCHEMA}")
+sf_conn.cursor().execute(f"USE ROLE {SNOWFLAKE_ROLE}")
+sf_conn.cursor().execute(f"USE WAREHOUSE {SNOWFLAKE_WAREHOUSE}")
+sf_conn.cursor().execute(f"USE DATABASE {SNOWFLAKE_DATABASE}")
+sf_conn.cursor().execute(f"USE SCHEMA {SNOWFLAKE_RAW_SCHEMA}")
 
 #Azure SA
 connect_str = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
@@ -204,7 +204,7 @@ def upload_to_snowflake(connection, dataframe, file, schema):
         cur.execute(f"USE SCHEMA {schema}")
         cur.execute(create_table_sql)
         cur.close()
-        success, nchunks, nrows, _ = write_pandas(conn=conn, df=dataframe, table_name=file, database=SNOWFLAKE_DATABASE, schema=schema, compression="snappy", quote_identifiers=False)
+        success, nchunks, nrows, _ = write_pandas(conn=sf_conn, df=dataframe, table_name=file, database=SNOWFLAKE_DATABASE, schema=schema, compression="snappy", quote_identifiers=False)
         st.toast(f'{file} uploaded to Snowflake {schema}.{file}', icon='✅')
     except Exception as e:
         st.write(f"Failed to upload {file}. Error: {e}")
@@ -264,7 +264,7 @@ if choice == 'Link Records':
         st.image("Assets/Images/snowflake.png", width=100)
         sf = st.checkbox('Snowflake',key='sf_check')    
         if sf:
-            sf_df = populate_sf_data(conn, SNOWFLAKE_RAW_SCHEMA)
+            sf_df = populate_sf_data(sf_conn, SNOWFLAKE_RAW_SCHEMA)
             full_data = full_data | sf_df
             st.markdown('##')
             st.write('Snowflake data loaded.')
@@ -440,13 +440,13 @@ elif choice == 'Data Simulation':
                     df = pd.read_csv(uploaded_file)
                     df = process_dataframe(df)
                     table_name = uploaded_file.name.replace(' ','_').replace('.csv','').upper()
-                    upload_to_snowflake(connection=conn, dataframe=df, file=table_name, schema=SNOWFLAKE_RAW_SCHEMA)
+                    upload_to_snowflake(connection=sf_conn, dataframe=df, file=table_name, schema=SNOWFLAKE_RAW_SCHEMA)
                 st.success("Snowflake DB hydrated now.")
         st.markdown('##')
         snowflake_raw_delete = st.toggle('Delete Snowflake data', key="sf_raw")
         if snowflake_raw_delete:
             with st.status("Deleting snowflake data...", expanded=True) as status:
-                cur = conn.cursor()
+                cur = sf_conn.cursor()
                 cur.execute(f"""
                 SELECT table_name
                 FROM information_schema.tables
@@ -718,7 +718,7 @@ elif choice == 'Identify Records':
 
             full_data={}
 
-            sf_df = populate_sf_data(conn, SNOWFLAKE_RAW_SCHEMA)
+            sf_df = populate_sf_data(sf_conn, SNOWFLAKE_RAW_SCHEMA)
             full_data = full_data | sf_df
 
             schema_name = 'insightpii_raw'
