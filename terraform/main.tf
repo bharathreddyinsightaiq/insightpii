@@ -193,6 +193,12 @@ resource "azurerm_key_vault_secret" "COG_ENDPOINT" {
   key_vault_id = azurerm_key_vault.insightpii-kv.id
 }
 
+resource "azurerm_key_vault_secret" "AZURE_ACCESS_KEY" {
+  name         = "AZURE-ACCESS-KEY"
+  value        = var.AZURE_ACCESS_KEY
+  key_vault_id = azurerm_key_vault.insightpii-kv.id
+}
+
 
 # Azure Container Instance (ACI)
 resource "azurerm_container_group" "container" {
@@ -245,6 +251,7 @@ resource "azurerm_container_group" "container" {
       VISION_ENDPOINT = azurerm_key_vault_secret.VISION_ENDPOINT.value
       COG_KEY = azurerm_key_vault_secret.COG_KEY.value
       COG_ENDPOINT = azurerm_key_vault_secret.COG_ENDPOINT.value
+      AZURE_ACCESS_KEY=azurerm_key_vault_secret.AZURE_ACCESS_KEY.value
     }
   }
 }

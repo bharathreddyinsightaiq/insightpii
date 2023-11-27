@@ -75,7 +75,8 @@ jobs:
         TF_VAR_VISION_KEY: ${{ secrets.VISION_KEY }}
         TF_VAR_docker_username: ${{ secrets.DOCKER_HUB_USERNAME }}
         TF_VAR_docker_password: ${{ secrets.DOCKER_PAT }}
-      
+        TF_VAR_AZURE_ACCESS_KEY: ${{ secrets.AZURE_ACCESS_KEY}}
+        
       run: |
         cd terraform
         terraform init

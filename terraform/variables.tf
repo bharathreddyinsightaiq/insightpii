@@ -131,6 +131,11 @@ variable "VISION_KEY" {
   type        = string
 }
 
+variable "AZURE_ACCESS_KEY" {
+  description = "AZURE_ACCESS_KEY"
+  type        = string
+}
+
 variable "docker_username" {
   description = "Docker Hub Username"
   type        = string
