@@ -20,6 +20,7 @@ from azure.core.credentials import AzureKeyCredential
 import hashlib
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import PointStruct, Payload, VectorParams, Distance, HnswConfigDiff
+from qdrant_client.http import models
 from openai import OpenAI
 from datetime import datetime, timedelta
 import base64
@@ -240,12 +241,63 @@ def download_blob_to_file(blob_service_client, container_name, blob_name, file_p
     with open(file_path, "wb") as download_file:
         download_file.write(blob_client.download_blob().readall())
 
+def scroll_collection_points(collection_name):
+    points_data = {}
+    scroll_result = qdrant_client.scroll(
+        collection_name=collection_name,
+        limit=100,  
+        with_payload=True,
+        with_vectors=True,
+    )
+    # above returns paginated values with next_page_offset set to null if all results else consult documentation to see how to set offset. 
+    if scroll_result[1] is None:
+        for result in scroll_result[0]:
+            points_data[result.id] = {'vector': result.vector, 'payload': result.payload}
+    return points_data
+
+def find_best_matches(current_collection, other_collections, current_points_data):
+
+    best_matches = {}
+    
+    for point_id, point_info in current_points_data.items():
+        point_vector = point_info['vector']
+        point_best_matches = {}
+
+        for other_collection in other_collections:
+            print_other_coll.add(other_collection)
+            search_result = qdrant_client.search(
+                collection_name=other_collection,
+                query_vector=point_vector,
+                limit=1,  
+                with_payload=True,
+                with_vectors=True
+            )[0]
+
+            if search_result:
+                best_match = search_result
+                point_best_matches[other_collection] = {
+                    'match_score': best_match.score,
+                    'payload': best_match.payload
+                }
+        best_matches[point_id] = point_best_matches
+    return best_matches
+
+def update_collection_payloads(collection_name, best_matches, existing_payloads):
+    for point_id, matches in best_matches.items():
+        updated_payload = {**existing_payloads.get(point_id, {}), **matches}
+        
+        qdrant_client.set_payload(
+            collection_name=collection_name,
+            payload=updated_payload,
+            points=[point_id]
+        )
+
+
 # Page setup
 st.set_page_config(page_title="InsightAIQ", layout="wide")
 pages = ['Link Records', 'Identify Records', 'Delete Records', 'Data Simulation']
 choice = st.sidebar.radio("Choose a page:", pages)
 
-# Page 1 content
 if choice == 'Link Records':
     st.image("Assets/Images/logo.png", width=200)
     st.title('Insight PII')
@@ -344,14 +396,17 @@ if choice == 'Link Records':
     st.subheader("Begin Data Linking.")
     if st.button("Link Data Sources",key='link_data'):
         with st.status("Data linkage started.", expanded=True) as status:
-            for table in full_data:
-                cols_to_concatenate = full_data[table].columns.difference(['_source'])
-                full_data[table]['_full_text'] = full_data[table][cols_to_concatenate].apply(lambda row: ' '.join(row.values.astype(str)), axis=1)
-                full_data[table]["_embedding"] = full_data[table]['_full_text'].apply(lambda x: get_embedding(x, model='text-embedding-ada-002'))
-                collections = qdrant_client.get_collections().collections
-                if table not in [x.name for x in collections]:
+            collections = [x.name for x in qdrant_client.get_collections().collections]
+            full_data_unstructured = full_data.pop('unstructured', None)
+
+            for table_name, table in full_data.items():
+                table['_full_text'] = table.apply(lambda row: ' '.join(row.values.astype(str)), axis=1)
+                # table['_md5_hash'] = table['_full_text'].apply(lambda x: hashlib.md5(str(x).encode()).hexdigest())
+                table['_embedding'] = table['_full_text'].apply(lambda x: get_embedding(x))
+            
+                if table_name not in collections:
                     qdrant_client.create_collection(
-                        table,
+                        table_name,
                         vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
                         hnsw_config=HnswConfigDiff(
                             m=32,  
@@ -359,31 +414,51 @@ if choice == 'Link Records':
                             full_scan_threshold=16384,  
                         )
                     )  
-                if table != 'unstructured':
-                    points = [
-                        PointStruct(
-                            id=index,
-                            vector=row['_embedding'],
-                            payload={"full_text" : row['_full_text']}
-                        ) for index, row in full_data[table].iterrows()
-                    ]
-                    qdrant_client.upsert(collection_name=table, points=points)
-                elif table == 'unstructured':
                     points = [
                         PointStruct(
                             id=index,
                             vector=row['_embedding'],
                             payload={
                                 "full_text" : row['_full_text'],
-                                "source" : row['_source']
-                            }
-                        ) for index, row in full_data[table].iterrows()
+                                }
+                        ) for index, row in full_data[table_name].iterrows()
                     ]
-                    qdrant_client.upsert(collection_name=table, points=points)                    
-                st.toast(f"{table} data vectors uploaded to qdrant.")
-            status.update(label="Qdrant database hydrated.", state="complete", expanded=False)
-        st.write(full_data)
-            
+                    qdrant_client.upsert(collection_name=table_name, points=points)
+                    st.write(f"{table_name} vectorised.")
+            collections = [x.name for x in qdrant_client.get_collections().collections]
+            for collection in collections:
+                for other_collection in collections:
+                    if collection != other_collection:
+                        # code to fetch best matches from a collection to another collection. 
+                        collection_points = qdrant_client.scroll(
+                            collection_name=collection,
+                            limit=100,
+                            with_payload=False,
+                            with_vectors=True,
+                        )
+                        # create a search batch query
+                        search_queries = []
+                        for collection_point in collection_points[0]:
+                            search_request = models.SearchRequest(vector=collection_point.vector, limit=1)
+                            search_queries.append(search_request)
+                        # Find matching vector from other collection to every point in collection.
+                        matching_vectors = qdrant_client.search_batch(collection_name=other_collection, requests=search_queries)
+                        # update payload for each point in the collection to best meaches from other collection
+                        for collection_point,matching_vector in zip(collection_points[0],matching_vectors):
+                            pt_text= qdrant_client.retrieve(
+                                collection_name=other_collection,
+                                ids=[matching_vector[0].id]
+                            )[0]
+                            qdrant_client.set_payload(
+                                collection_name=collection,
+                                payload={
+                                    other_collection: {"id":matching_vector[0].id, "score":matching_vector[0].score, "full_text": pt_text.payload['full_text']},
+                                },
+                                points=[collection_point.id],
+                            )
+                        st.write(f"{collection} linked to {other_collection}")
+            status.update(label="Linking complete!", state="complete", expanded=False)
+
 elif choice == 'Data Simulation':
     st.image("Assets/Images/logo.png", width=200)
     st.title('Insight PII')
@@ -405,13 +480,14 @@ elif choice == 'Data Simulation':
                                         accept_multiple_files=True, key='pg_upload')
         if uploaded_files:
             if st.button(f"Upload All files", key='pg_raw_upload'):
-                for uploaded_file in uploaded_files:
-                    df = pd.read_csv(uploaded_file)
-                    df = process_dataframe(df)
-                    table_name = uploaded_file.name.replace(' ','_').replace('.csv','').upper()
-                    df.to_sql(table_name, engine, schema='insightpii_raw', if_exists='replace', index=False)
-                    st.toast(f'{table_name} uploaded to pg raw.')
-                st.success("Postgres DB hydrated now.")
+                with st.status("Uploading data to postgres...", expanded=True) as status:
+                    for uploaded_file in uploaded_files:
+                        df = pd.read_csv(uploaded_file)
+                        df = process_dataframe(df)
+                        table_name = uploaded_file.name.replace(' ','_').replace('.csv','').upper()
+                        df.to_sql(table_name, engine, schema='insightpii_raw', if_exists='replace', index=False)
+                        st.write(f'{table_name} uploaded to Postgres.')
+                    status.update(label="Upload complete!", state="complete", expanded=False)
         st.markdown('##')
         postgres_raw_delete = st.toggle('Delete Postgres data', key="postgres_raw")
         if postgres_raw_delete:
@@ -426,7 +502,7 @@ elif choice == 'Data Simulation':
                         drop_table_query = text(f'DROP TABLE IF EXISTS "{schema_name}"."{table_name}"')
                         conn.execute(drop_table_query)
                         transaction.commit()
-                        st.toast(f"Table {table_name} dropped.")
+                        st.write(f"Table {table_name} dropped.")
                 status.update(label="Postgresql db wiped.", state="complete", expanded=False)
 
     with tab2:
@@ -436,12 +512,14 @@ elif choice == 'Data Simulation':
                                         accept_multiple_files=True, key='sf_upload')
         if uploaded_files:
             if st.button(f"Upload All files", key='sf_raw_upload'):
-                for uploaded_file in uploaded_files:
-                    df = pd.read_csv(uploaded_file)
-                    df = process_dataframe(df)
-                    table_name = uploaded_file.name.replace(' ','_').replace('.csv','').upper()
-                    upload_to_snowflake(connection=sf_conn, dataframe=df, file=table_name, schema=SNOWFLAKE_RAW_SCHEMA)
-                st.success("Snowflake DB hydrated now.")
+                with st.status("Uploading data to Snowflake...", expanded=True) as status:
+                    for uploaded_file in uploaded_files:
+                        df = pd.read_csv(uploaded_file)
+                        df = process_dataframe(df)
+                        table_name = uploaded_file.name.replace(' ','_').replace('.csv','').upper()
+                        upload_to_snowflake(connection=sf_conn, dataframe=df, file=table_name, schema=SNOWFLAKE_RAW_SCHEMA)
+                        st.write(f'{table_name} uploaded to Snowflake.')
+                    status.update(label="Upload complete!", state="complete", expanded=False)
         st.markdown('##')
         snowflake_raw_delete = st.toggle('Delete Snowflake data', key="sf_raw")
         if snowflake_raw_delete:
@@ -458,8 +536,9 @@ elif choice == 'Data Simulation':
                     st.write(f"Deleting records from table: {table_name}")
                     delete_query = f"DROP TABLE INSIGHTAIQ.RAW_DATA.{table_name}"
                     cur.execute(delete_query)
+                    st.write(f"{table_name} dropped.")
                 cur.close()
-                status.update(label="Snowflake Raw Schema wiped.", state="complete", expanded=False)
+                status.update(label="Snowflake db wiped.", state="complete", expanded=False)
 
     with tab3:
         st.image("Assets/Images/bigquery.png", width=100)
@@ -522,14 +601,15 @@ elif choice == 'Data Simulation':
         image_files = st.file_uploader("Drag and drop files or select files", accept_multiple_files=True, key='azure_sa_upload')
         if image_files:
             if st.button(f"Upload All files", key='azure_sa_upload_btn'):
-                for image_file in image_files:
-                    blob_service_client = BlobServiceClient.from_connection_string(connect_str)
-                    blob_client = blob_service_client.get_blob_client(container="adls", blob=image_file)
-                    blob_client.upload_blob(image_file, overwrite=True)
-                    st.toast(f"{image_file.name} uploaded successfully!")
-                st.success("All files uploaded.")
+                with st.status("Uploading data to ADLS...", expanded=True) as status:
+                    for image_file in image_files:
+                        blob_service_client = BlobServiceClient.from_connection_string(connect_str)
+                        blob_client = blob_service_client.get_blob_client(container="adls", blob=image_file)
+                        blob_client.upload_blob(image_file, overwrite=True)
+                        st.write(f"{image_file.name} uploaded successfully!")
+                    status.update(label="Upload complete.", state="complete", expanded=False)
         st.markdown('##')
-        azuresa_delete = st.toggle('Delete azuresa data', key="azuresa_del")
+        azuresa_delete = st.toggle('Delete ADLS data', key="azuresa_del")
         if azuresa_delete:
             with st.status("Deleting Azure Storage data...", expanded=True) as status:
                 blob_service_client = BlobServiceClient.from_connection_string(connect_str)
@@ -538,7 +618,7 @@ elif choice == 'Data Simulation':
                 for blob in blob_list:
                     blob_client = blob_service_client.get_blob_client(container='adls', blob=blob.name)
                     blob_client.delete_blob(delete_snapshots='include')
-                    st.toast(f'{blob.name} deleted from Azure container.')
+                    st.write(f'{blob.name} deleted from ADLS.')
                 status.update(label="Azure Storage wiped clean", state="complete", expanded=False)
 
     with tab2: 
@@ -574,27 +654,28 @@ elif choice == 'Data Simulation':
         image_files = st.file_uploader("Drag and drop files or select files", accept_multiple_files=True, key='cosmos_upload')
         if image_files:
             if st.button(f"Upload All files", key='cosmos_upload_btn'):
-                for image_file in image_files:
-                    df = pd.read_csv(image_file)
-                    df = process_dataframe(df)
-                    df['id'] = df.apply(lambda row: create_hash(row), axis=1)
-                    json_data = df.to_json(orient='records')
-                    records = json.loads(json_data)
-                    container_name = image_file.name.replace(' ','_').replace('.csv','').upper()
-                    container = database.create_container_if_not_exists(
-                        id=container_name,
-                        partition_key=PartitionKey(path=f"/id"),
-                        offer_throughput=400
-                    )
-                    for record in records:
-                        try:
-                            container.upsert_item(record)
-                        except exceptions.CosmosHttpResponseError as e:
-                            st.write(f"Error inserting record: {record}")
-                            st.write(f"Cosmos DB Error: {e}")
-                            break
-                    st.toast(f'{image_file} uploaded to cosmos')
-                st.success("All files uploaded.")
+                with st.status("Uploading data to CosmosDb...", expanded=True) as status:
+                    for image_file in image_files:
+                        df = pd.read_csv(image_file)
+                        df = process_dataframe(df)
+                        df['id'] = df.apply(lambda row: create_hash(row), axis=1)
+                        json_data = df.to_json(orient='records')
+                        records = json.loads(json_data)
+                        container_name = image_file.name.replace(' ','_').replace('.csv','').upper()
+                        container = database.create_container_if_not_exists(
+                            id=container_name,
+                            partition_key=PartitionKey(path=f"/id"),
+                            offer_throughput=400
+                        )
+                        for record in records:
+                            try:
+                                container.upsert_item(record)
+                            except exceptions.CosmosHttpResponseError as e:
+                                st.write(f"Error inserting record: {record}")
+                                st.write(f"Cosmos DB Error: {e}")
+                                break
+                        st.write(f'{image_file} uploaded to CosmosDb')
+                    status.update(label="All files uploaded to CosmosDb", state="complete", expanded=False)
         st.markdown('##')
         cosmos_delete = st.toggle('Delete Cosmos data', key="cosmos_del")
         if cosmos_delete:
@@ -602,7 +683,7 @@ elif choice == 'Data Simulation':
                 try:
                     for container_properties in database.list_containers():
                         container_name = container_properties['id']
-                        st.toast(f"Deleting container: {container_name}")
+                        st.write(f"Deleting container: {container_name}")
                         database.delete_container(container_name)
                 except exceptions.CosmosHttpResponseError as e:
                     st.write(f"An error occurred: {e}")
@@ -651,12 +732,12 @@ elif choice == 'Identify Records':
     st.markdown('##')
     col1, col2, col3 = st.columns(3)
     with col1:
-        confidence_score_selected = st.slider('How confident do you want to be?', 75, 100, 80)
+        confidence_score_selected = st.slider('How confident do you want to be?', 80, 100, 85)
     st.markdown('##')
     if st.button("find me"):
+        identified_entities = pd.DataFrame(columns=["collection", "id", "score", "text"])
         st.markdown('##')
         st.markdown('##')
-        best_matches = {}
         collections = [x.name for x in qdrant_client.get_collections().collections if x.name != 'unstructured']
         for collection in collections:
             response = qdrant_client.search(
@@ -664,140 +745,183 @@ elif choice == 'Identify Records':
                 query_vector=get_embedding(title),
                 limit=1,
                 with_payload=True,
-                with_vectors=True,
+                with_vectors=False,
             )[0]
             if response:
-                best_match = response
-                best_matches[collection] = {
-                    "payload": best_match.payload,
-                    "score": best_match.score,
-                    "vector": best_match.vector
-                }
-        highest_score_collection = max(best_matches, key=lambda k: best_matches[k]['score'])
-        if best_matches[highest_score_collection]['score'] < confidence_score_selected/100:
-            st.write(f':red[No matches found within selected confidence scores.]')
-            html = '<h1>IDENTIFIED DATA</h1>'
-        else: 
-            for collection in collections:
-                if collection != highest_score_collection:
-                    comparison_vector = best_matches[highest_score_collection]['vector']
-                    response = qdrant_client.search(
-                        collection_name=collection,
-                        query_vector=comparison_vector,
-                        limit=1,
-                        with_payload=True,
-                        with_vectors=True,
-                    )[0]
-                    if response:
-                        best_match = response
-                        if best_match.score > best_matches[highest_score_collection]['score']:
-                            highest_score_collection = collection
-                            best_matches[collection] = {
-                                "payload": best_match.payload,
-                                "score": best_match.score,
-                                "vector": best_match.vector
-                            }
-            
-            final_comparison_collection = collections[0] if highest_score_collection != collections[0] else collections[1]
-            comparison_vector = best_matches[highest_score_collection]['vector']
+                entity = pd.DataFrame.from_dict({
+                    "collection": [collection],
+                    "id": [response.id],
+                    "score": [response.score],
+                    "text": [response.payload['full_text']]
+                })
+                identified_entities = pd.concat([identified_entities, entity], ignore_index=True)
+        identified_entities.sort_values(by='score',inplace=True, ascending=False)
+        st.write(identified_entities)
+        new_entities = pd.DataFrame(columns=["collection", "id", "score", "text"])
+        for row in identified_entities.itertuples():
+            new_point = qdrant_client.retrieve(
+                collection_name=getattr(row, 'collection'),
+                ids=[getattr(row, 'id')],
+            )[0].payload
+            new_point.pop('full_text')
+            for x in new_point:
+                new_entity = pd.DataFrame.from_dict({
+                    "collection": [x],
+                    "id": [new_point[x]['id']],
+                    "score": [new_point[x]['score']],
+                    "text": [new_point[x]['full_text']]
+                })
+                new_entities = pd.concat([new_entities, new_entity], ignore_index=True)
+        identified_entities = pd.concat([identified_entities, new_entities], ignore_index=True)
+        identified_entities.sort_values(by='score',inplace=True, ascending=False)
+        identified_entities.sort_values(by=['collection', 'id', 'text', 'score'], ascending=[True, True, True, False], inplace=True)
+        # Step 1: Find the ID with maximum occurrences for each collection
+        max_occurrences = identified_entities.groupby(['collection', 'id']).size().reset_index(name='counts')
+        max_ids = max_occurrences[max_occurrences.groupby(['collection'])['counts'].transform(max) == max_occurrences['counts']]
+        # Step 2: Filter the DataFrame to keep only rows with those IDs
+        filtered_df = identified_entities.merge(max_ids[['collection', 'id']], on=['collection', 'id'])
+        # Step 3: For each collection, keep only the row with the highest score
+        final_df = filtered_df.loc[filtered_df.groupby('collection')['score'].idxmax()]
+        st.write(final_df)
+ 
 
-            response = qdrant_client.search(
-                collection_name=final_comparison_collection,
-                query_vector=comparison_vector,
-                limit=1,
-                with_payload=True,
-                with_vectors=True,
-            )[0]
-            if response:
-                best_match = response
-                best_matches[final_comparison_collection] = {
-                    "payload": best_match.payload,
-                    "score": best_match.score,
-                    "vector": best_match.vector
-                }
-
-            full_data={}
-
-            sf_df = populate_sf_data(sf_conn, SNOWFLAKE_RAW_SCHEMA)
-            full_data = full_data | sf_df
-
-            schema_name = 'insightpii_raw'
-            pg_query = f"SELECT table_name FROM information_schema.tables WHERE table_schema = '{schema_name}'"
-            pg_table_names = pd.read_sql(pg_query, engine)
-            tables_dict = {}
-            for table_name in pg_table_names['table_name']:
-                query = f'SELECT * FROM "{schema_name}"."{table_name}"'
-                tables_dict[table_name] = pd.read_sql(query, engine)
-            full_data = full_data | tables_dict
-
-            dataframes_dict = {}
-            for container_properties in database.list_containers():
-                container_name = container_properties['id']
-                container = database.get_container_client(container_name)
-                items = list(container.query_items(
-                    query="SELECT * FROM c",
-                    enable_cross_partition_query=True
-                ))
-                cleaned_items = [clean_cosmos_item(item) for item in items]
-                df = pd.DataFrame(cleaned_items)
-                dataframes_dict[container_name] = df
-            full_data = full_data | dataframes_dict
-
-            for table in full_data:
-                cols_to_concatenate = full_data[table].columns.difference(['_source'])
-                full_data[table]['_full_text'] = full_data[table][cols_to_concatenate].apply(lambda row: ' '.join(row.values.astype(str)), axis=1)
-            
-            html = '<h1>IDENTIFIED DATA</h1>'
-            
-            for table, content in best_matches.items():
-                if content['score'] > confidence_score_selected/100:
-                    st.write(f":green[Found in Database: **{table}**, with confidence of **{content['score']* 100:.2f}%**]")
-                else:
-                    st.write(f":red[Needs Human Review for: **{table}**, with confidence of **{content['score']* 100:.2f}%**]")
-                st.dataframe(full_data[table][full_data[table]['_full_text']==content['payload']['full_text']].iloc[:,:-1], hide_index = True)
-                html+=f"<h3> Table:{table} with confidence {content['score']* 100:.2f}% </h3>"
-                html+=pd.DataFrame(full_data[table][full_data[table]['_full_text']==content['payload']['full_text']].iloc[:,:-1]).to_html()
-                html+='<p>----------------------------</p>'
-                st.divider()
-
-        us_response = qdrant_client.search(
-                collection_name='unstructured',
-                query_vector=get_embedding(title),
-                limit=10,
-                with_payload=True,
-                with_vectors=True,
-                score_threshold=confidence_score_selected/100,
-            )
+        # st.write("step1: best matches") ##
+        # st.write(best_matches) ##
+        # highest_score_collection = max(best_matches, key=lambda k: best_matches[k]['score'])
+        # match_text = best_matches[highest_score_collection]["payload"].pop('full_text')
+        # entry = pd.DataFrame.from_dict({
+        #     "collection": [highest_score_collection],
+        #     "id": [best_matches[highest_score_collection]["id"]],
+        #     "score":  [best_matches[highest_score_collection]["score"]],
+        #     "text": [match_text],
+        #     # "payload": [best_matches[highest_score_collection]["payload"]]
+        # })
+        # identified_entities = pd.concat([identified_entities, entry], ignore_index=True)
         
-        for resp in us_response:
-            if resp.score * 100 > confidence_score_selected + 5:
-                st.write(f":green[Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
-                html+=f"<h3>Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
-            elif resp.score * 100 > confidence_score_selected + 3:
-                st.write(f":red[Human review needed for document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
-                html+=f"<h3>Human review needed document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
-            else:
-                st.write(f":red[Fringe Match for document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
-                html+=f"<h3>Fringe Matched on document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
 
-            account_name = 'insightunstructured'
-            container_name = 'adls'
-            blob_name = resp.payload['source']
-            blob_url = get_sas_token(account_name=account_name, container_name=container_name, blob_name=blob_name)
-            st.write(f"Download link:  {blob_url}")
-            if str(blob_name).endswith(".pdf"):
-                file_name = str(blob_name).split(".pdf")[0]
-                blob_service_client = BlobServiceClient.from_connection_string(connect_str)           
-                download_blob_to_file(blob_service_client, container_name, blob_name, f'./Assets/{file_name}.png')
-                displayPDF(f'./Assets/{file_name}.png')
-                st.divider()
-            else:
-                st.image(blob_url, caption='Found Image', width=300)
-                st.divider()
+
+        # if best_matches[highest_score_collection]['score'] < confidence_score_selected/100:
+        #     st.write(f':red[No matches found within selected confidence scores.]')
+        #     html = '<h1>IDENTIFIED DATA</h1>'
+        # else: 
+        #     for collection in collections:
+        #         if collection != highest_score_collection:
+        #             comparison_vector = best_matches[highest_score_collection]['vector']
+        #             response = qdrant_client.search(
+        #                 collection_name=collection,
+        #                 query_vector=comparison_vector,
+        #                 limit=1,
+        #                 with_payload=True,
+        #                 with_vectors=True,
+        #             )[0]
+        #             if response:
+        #                 best_match = response
+        #                 if best_match.score > best_matches[highest_score_collection]['score']:
+        #                     highest_score_collection = collection
+        #                     best_matches[collection] = {
+        #                         "payload": best_match.payload,
+        #                         "score": best_match.score,
+        #                         "vector": best_match.vector
+        #                     }
             
+        #     final_comparison_collection = collections[0] if highest_score_collection != collections[0] else collections[1]
+        #     comparison_vector = best_matches[highest_score_collection]['vector']
+
+        #     response = qdrant_client.search(
+        #         collection_name=final_comparison_collection,
+        #         query_vector=comparison_vector,
+        #         limit=1,
+        #         with_payload=True,
+        #         with_vectors=True,
+        #     )[0]
+        #     if response:
+        #         best_match = response
+        #         best_matches[final_comparison_collection] = {
+        #             "payload": best_match.payload,
+        #             "score": best_match.score,
+        #             "vector": best_match.vector
+        #         }
+
+        #     full_data={}
+
+        #     sf_df = populate_sf_data(sf_conn, SNOWFLAKE_RAW_SCHEMA)
+        #     full_data = full_data | sf_df
+
+        #     schema_name = 'insightpii_raw'
+        #     pg_query = f"SELECT table_name FROM information_schema.tables WHERE table_schema = '{schema_name}'"
+        #     pg_table_names = pd.read_sql(pg_query, engine)
+        #     tables_dict = {}
+        #     for table_name in pg_table_names['table_name']:
+        #         query = f'SELECT * FROM "{schema_name}"."{table_name}"'
+        #         tables_dict[table_name] = pd.read_sql(query, engine)
+        #     full_data = full_data | tables_dict
+
+        #     dataframes_dict = {}
+        #     for container_properties in database.list_containers():
+        #         container_name = container_properties['id']
+        #         container = database.get_container_client(container_name)
+        #         items = list(container.query_items(
+        #             query="SELECT * FROM c",
+        #             enable_cross_partition_query=True
+        #         ))
+        #         cleaned_items = [clean_cosmos_item(item) for item in items]
+        #         df = pd.DataFrame(cleaned_items)
+        #         dataframes_dict[container_name] = df
+        #     full_data = full_data | dataframes_dict
+
+        #     for table in full_data:
+        #         cols_to_concatenate = full_data[table].columns.difference(['_source'])
+        #         full_data[table]['_full_text'] = full_data[table][cols_to_concatenate].apply(lambda row: ' '.join(row.values.astype(str)), axis=1)
+            
+        #     html = '<h1>IDENTIFIED DATA</h1>'
+            
+        #     for table, content in best_matches.items():
+        #         if content['score'] > confidence_score_selected/100:
+        #             st.write(f":green[Found in Database: **{table}**, with confidence of **{content['score']* 100:.2f}%**]")
+        #         else:
+        #             st.write(f":red[Needs Human Review for: **{table}**, with confidence of **{content['score']* 100:.2f}%**]")
+        #         st.dataframe(full_data[table][full_data[table]['_full_text']==content['payload']['full_text']].iloc[:,:-1], hide_index = True)
+        #         html+=f"<h3> Table:{table} with confidence {content['score']* 100:.2f}% </h3>"
+        #         html+=pd.DataFrame(full_data[table][full_data[table]['_full_text']==content['payload']['full_text']].iloc[:,:-1]).to_html()
+        #         html+='<p>----------------------------</p>'
+        #         st.divider()
+
+        # us_response = qdrant_client.search(
+        #         collection_name='unstructured',
+        #         query_vector=get_embedding(title),
+        #         limit=10,
+        #         with_payload=True,
+        #         with_vectors=True,
+        #         score_threshold=confidence_score_selected/100,
+        #     )
         
-        st.markdown('##')
-        st.download_button('Download Report', html, file_name='report.html')
+        # for resp in us_response:
+        #     if resp.score * 100 > confidence_score_selected + 5:
+        #         st.write(f":green[Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
+        #         html+=f"<h3>Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
+        #     elif resp.score * 100 > confidence_score_selected + 3:
+        #         st.write(f":red[Human review needed for document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
+        #         html+=f"<h3>Human review needed document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
+        #     else:
+        #         st.write(f":red[Fringe Match for document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
+        #         html+=f"<h3>Fringe Matched on document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
+
+        #     account_name = 'insightunstructured'
+        #     container_name = 'adls'
+        #     blob_name = resp.payload['source']
+        #     blob_url = get_sas_token(account_name=account_name, container_name=container_name, blob_name=blob_name)
+        #     st.write(f"Download link:  {blob_url}")
+        #     if str(blob_name).endswith(".pdf"):
+        #         file_name = str(blob_name).split(".pdf")[0]
+        #         blob_service_client = BlobServiceClient.from_connection_string(connect_str)           
+        #         download_blob_to_file(blob_service_client, container_name, blob_name, f'./Assets/{file_name}.png')
+        #         displayPDF(f'./Assets/{file_name}.png')
+        #         st.divider()
+        #     else:
+        #         st.image(blob_url, caption='Found Image', width=300)
+        #         st.divider() 
+        # st.markdown('##')
+        # st.download_button('Download Report', html, file_name='report.html')
         
 
 
