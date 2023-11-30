@@ -405,10 +405,7 @@ if choice == 'Link Records':
                 blob_content = read_blob(blob_client)
                 extracted_text = extract_text_from_image(blob_content)
                 documents = [extracted_text]
-                result = process_large_documents(text_analytics_client, extracted_text) # ~~~~~cuncomment below line and delete this
-                # result = entity_recognition(text_analytics_client, documents) # ~~~~~~~~~~~~
-                # LIMIT DOCUMENT SIZE TO 5120 text elements 
-                # WRITE CODE TO BREAK CHUNKS and have same source tag.
+                result = process_large_documents(text_analytics_client, extracted_text) 
                 entities_info = ""
                 if result:
                     for doc in result:
@@ -1002,64 +999,3 @@ elif choice == 'Data Simulation':
         st.image("Assets/Images/neon.png", width=100)
         st.subheader("Neon Vector Database")
         neon_delete = st.toggle('Delete Neon data', key="Neon")
-
-
-       
-        #     for table, content in best_matches.items():
-        #         if content['score'] > confidence_score_selected/100:
-        #             st.write(f":green[Found in Database: **{table}**, with confidence of **{content['score']* 100:.2f}%**]")
-        #         else:
-        #             st.write(f":red[Needs Human Review for: **{table}**, with confidence of **{content['score']* 100:.2f}%**]")
-        #         st.dataframe(full_data[table][full_data[table]['_full_text']==content['payload']['full_text']].iloc[:,:-1], hide_index = True)
-        #         html+=f"<h3> Table:{table} with confidence {content['score']* 100:.2f}% </h3>"
-        #         html+=pd.DataFrame(full_data[table][full_data[table]['_full_text']==content['payload']['full_text']].iloc[:,:-1]).to_html()
-        #         html+='<p>----------------------------</p>'
-        #         st.divider()
-
-        # us_response = qdrant_client.search(
-        #         collection_name='unstructured',
-        #         query_vector=get_embedding(title),
-        #         limit=10,
-        #         with_payload=True,
-        #         with_vectors=True,
-        #         score_threshold=confidence_score_selected/100,
-        #     )
-        
-        # for resp in us_response:
-        #     if resp.score * 100 > confidence_score_selected + 5:
-        #         st.write(f":green[Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
-        #         html+=f"<h3>Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
-        #     elif resp.score * 100 > confidence_score_selected + 3:
-        #         st.write(f":red[Human review needed for document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
-        #         html+=f"<h3>Human review needed document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
-        #     else:
-        #         st.write(f":red[Fringe Match for document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
-        #         html+=f"<h3>Fringe Matched on document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
-
-        #     account_name = 'insightunstructured'
-        #     container_name = 'adls'
-        #     blob_name = resp.payload['source']
-        #     blob_url = get_sas_token(account_name=account_name, container_name=container_name, blob_name=blob_name)
-        #     st.write(f"Download link:  {blob_url}")
-        #     if str(blob_name).endswith(".pdf"):
-        #         file_name = str(blob_name).split(".pdf")[0]
-        #         blob_service_client = BlobServiceClient.from_connection_string(connect_str)           
-        #         download_blob_to_file(blob_service_client, container_name, blob_name, f'./Assets/{file_name}.png')
-        #         displayPDF(f'./Assets/{file_name}.png')
-        #         st.divider()
-        #     else:
-        #         st.image(blob_url, caption='Found Image', width=300)
-        #         st.divider() 
-        # st.markdown('##')
-        
-
-
-
-
-        
-
-
-
-    
-
-
