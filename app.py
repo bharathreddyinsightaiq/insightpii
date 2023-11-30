@@ -24,6 +24,7 @@ from qdrant_client.http import models
 from openai import OpenAI
 from datetime import datetime, timedelta
 import base64
+from fuzzywuzzy import fuzz
 
 load_dotenv()
 
@@ -89,6 +90,12 @@ qdrant_client = QdrantClient(
 #OpenAI client
 openai_api_key = os.getenv("OPENAI_KEY")
 client = OpenAI(api_key=openai_api_key)
+
+def total_match_score(row, conditions_dict):
+    score = 0
+    for key, value in conditions_dict.items():
+        score += fuzz.ratio(str(row[key]), value)
+    return score
 
 def get_sas_token(account_name, container_name, blob_name, account_key=azure_storage_access_key):
     sas_token = generate_blob_sas(
@@ -295,11 +302,13 @@ def update_collection_payloads(collection_name, best_matches, existing_payloads)
 
 # Page setup
 st.set_page_config(page_title="InsightAIQ", layout="wide")
+st.sidebar.image("Assets/Images/logo.png", width=200)
+st.sidebar.header("InsightAIQ")
 pages = ['Link Records', 'Identify Records', 'Delete Records', 'Data Simulation']
 choice = st.sidebar.radio("Choose a page:", pages)
 
 if choice == 'Link Records':
-    st.image("Assets/Images/logo.png", width=200)
+    # st.image("Assets/Images/logo.png", width=200)
     st.title('Insight PII')
     st.subheader('PII identification and management solutions')
     st.markdown('##')
@@ -397,35 +406,52 @@ if choice == 'Link Records':
     if st.button("Link Data Sources",key='link_data'):
         with st.status("Data linkage started.", expanded=True) as status:
             collections = [x.name for x in qdrant_client.get_collections().collections]
-            full_data_unstructured = full_data.pop('unstructured', None)
-
             for table_name, table in full_data.items():
                 table['_full_text'] = table.apply(lambda row: ' '.join(row.values.astype(str)), axis=1)
-                # table['_md5_hash'] = table['_full_text'].apply(lambda x: hashlib.md5(str(x).encode()).hexdigest())
                 table['_embedding'] = table['_full_text'].apply(lambda x: get_embedding(x))
-            
                 if table_name not in collections:
-                    qdrant_client.create_collection(
-                        table_name,
-                        vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
-                        hnsw_config=HnswConfigDiff(
-                            m=32,  
-                            ef_construct=400,  
-                            full_scan_threshold=16384,  
-                        )
-                    )  
-                    points = [
-                        PointStruct(
-                            id=index,
-                            vector=row['_embedding'],
-                            payload={
-                                "full_text" : row['_full_text'],
-                                }
-                        ) for index, row in full_data[table_name].iterrows()
-                    ]
-                    qdrant_client.upsert(collection_name=table_name, points=points)
+                    if table_name == 'unstructured':
+                        qdrant_client.create_collection(
+                            table_name,
+                            vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
+                            hnsw_config=HnswConfigDiff(
+                                m=32,  
+                                ef_construct=400,  
+                                full_scan_threshold=16384,  
+                            )
+                        )  
+                        points = [
+                            PointStruct(
+                                id=index,
+                                vector=row['_embedding'],
+                                payload={
+                                    "source" : row['_source'],
+                                    }
+                            ) for index, row in full_data[table_name].iterrows()
+                        ]
+                        qdrant_client.upsert(collection_name=table_name, points=points)
+                    else:
+                        qdrant_client.create_collection(
+                            table_name,
+                            vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
+                            hnsw_config=HnswConfigDiff(
+                                m=32,  
+                                ef_construct=400,  
+                                full_scan_threshold=16384,  
+                            )
+                        )  
+                        points = [
+                            PointStruct(
+                                id=index,
+                                vector=row['_embedding'],
+                                payload={
+                                    "full_text" : row['_full_text'],
+                                    }
+                            ) for index, row in full_data[table_name].iterrows()
+                        ]
+                        qdrant_client.upsert(collection_name=table_name, points=points)
                     st.write(f"{table_name} vectorised.")
-            collections = [x.name for x in qdrant_client.get_collections().collections]
+            collections = [x.name for x in qdrant_client.get_collections().collections if x.name!='unstructured']
             for collection in collections:
                 for other_collection in collections:
                     if collection != other_collection:
@@ -458,9 +484,239 @@ if choice == 'Link Records':
                             )
                         st.write(f"{collection} linked to {other_collection}")
             status.update(label="Linking complete!", state="complete", expanded=False)
+    
+    input_data = {}
+    st.divider()
+    st.markdown('##')
+    st.subheader("Identify an entity across the selected sources.")
+    st.markdown('##')
+    Guided_Search_Tab, Free_Search_Tab = st.tabs(["Guided Search", "Free Form Search"])
+    with Guided_Search_Tab:
+        full_data_unstructured = full_data.pop('unstructured', None)
+        st.subheader("Start search from a source system.")
+        chosen_table = st.selectbox("Select a Source:", list(full_data.keys()),None)
+        if chosen_table:
+            selected_columns = st.multiselect("Select at least 3 columns:", full_data[chosen_table].columns)
+            if len(selected_columns) < 3:
+                st.warning("Please select at least 3 columns.")
+            else:
+                with st.container():
+                    # Initialize an empty DataFrame to store user inputs
+                    
+                    if selected_columns:
+                        st.write('Please fill in the details for the selected options:')
+                        # Iterate over the selected options in groups of 2
+                        for i in range(0, len(selected_columns), 3):
+                            # Create a 3-column layout
+                            cols = st.columns(3)
+                            for j in range(3):
+                                if i + j < len(selected_columns):
+                                    selected_column = selected_columns[i + j]
+                                    # Conditionally display datepicker for "Birthdate"
+                                    if selected_column == 'BIRTHDATE':
+                                        input_data[selected_column] = cols[j].date_input(f"{selected_column}:")
+                                    else:
+                                        input_data[selected_column] = cols[j].text_input(f"{selected_column}:")
+        else:
+            st.write("please select a data source to proceed.")
+        
+        st.markdown('##')
+        if st.button("Search Strcutured Sources", key='guided_fine'):
+            # st.write(input_data)
+            temp_df = full_data[chosen_table][list(input_data.keys())].copy()
+            temp_df['match_score'] = temp_df.apply(total_match_score, axis=1, args=(input_data,))
+            # st.write(temp_df) ## CONTROL CHECKS #
+            closest_match_index = temp_df['match_score'].idxmax()
+            if temp_df['match_score'].max() < 200:
+                st.subheader(':red[NO RECORDs FOUND]')
+            else:
+                # st.write(closest_match_index)
+                # st.write(temp_df)
+                starting_point = qdrant_client.retrieve(
+                    collection_name=chosen_table,
+                    ids=[closest_match_index],
+                )[0]
+                identified_entities = pd.DataFrame.from_dict({
+                            "collection": [chosen_table],
+                            "id": [starting_point.id],
+                            "score": [1],
+                            "text": [starting_point.payload["full_text"]]
+                        })
+                starting_point.payload.pop("full_text")
+                #code to take match as df with score 1 and payload of match into subsequent rows
+                rows_list = []
+                for collection, values in starting_point.payload.items():
+                    row = {
+                        "collection": collection,
+                        "text": values["full_text"],
+                        "id": values["id"],
+                        "score": values["score"]
+                    }
+                    rows_list.append(row)
+                temp_entity_df = pd.DataFrame(rows_list)
+                identified_entities = pd.concat([identified_entities, temp_entity_df], ignore_index=True)
+                # st.write(identified_entities) ## ~~ CHECKS ~~ ##
+
+                new_entities = pd.DataFrame(columns=["collection", "id", "score", "text"])
+                for row in identified_entities.itertuples():
+                    new_point = qdrant_client.retrieve(
+                        collection_name=getattr(row, 'collection'),
+                        ids=[getattr(row, 'id')],
+                    )[0].payload
+                    new_point.pop('full_text')
+                    for x in new_point:
+                        new_entity = pd.DataFrame.from_dict({
+                            "collection": [x],
+                            "id": [new_point[x]['id']],
+                            "score": [new_point[x]['score']],
+                            "text": [new_point[x]['full_text']]
+                        })
+                        new_entities = pd.concat([new_entities, new_entity], ignore_index=True)
+                identified_entities = pd.concat([identified_entities, new_entities], ignore_index=True)
+                identified_entities.sort_values(by='score',inplace=True, ascending=False)
+                identified_entities.sort_values(by=['collection', 'id', 'text', 'score'], ascending=[True, True, True, False], inplace=True)
+                # Step 1: Find the ID with maximum occurrences for each collection
+                max_occurrences = identified_entities.groupby(['collection', 'id']).size().reset_index(name='counts')
+                max_ids = max_occurrences[max_occurrences.groupby(['collection'])['counts'].transform(max) == max_occurrences['counts']]
+                # Step 2: Filter the DataFrame to keep only rows with those IDs
+                filtered_df = identified_entities.merge(max_ids[['collection', 'id']], on=['collection', 'id'])
+                # Step 3: For each collection, keep only the row with the highest score
+                final_df = filtered_df.loc[filtered_df.groupby('collection')['score'].idxmax()]
+                final_df.sort_values(by='score', ascending=False, inplace=True)
+                
+                # full_data_unstructured = full_data.pop('unstructured', None)
+                for key, value in full_data.items():
+                    value['concatenated'] = value.apply(lambda row: ' '.join(row.astype(str)), axis=1)
+                for row in final_df.itertuples(): 
+                    score=getattr(row, 'score')
+                    collection=getattr(row, 'collection')
+                    text_to_find=getattr(row,'text')
+                    if getattr(row, 'score') >=.85:
+                        st.write(f':green[Found in **{collection}** with score of **{score}**]')
+                        st.dataframe(full_data[collection].loc[full_data[collection]['concatenated']==text_to_find].iloc[:,:-1],hide_index=True)
+                    else:
+                        st.write(f":red[Not found in **{collection}**]")
+                    st.divider()
+        
+        st.markdown('##')
+        cola, colb, colc = st.columns(3)
+        with cola:
+            confidence_score_selected = st.slider('How confident do you want to be?', 80, 100, 85, key='un_guided_score')
+        if st.button("Search Un-Strcutured Sources", key='Un_guided_fine'):        
+            st.subheader("Data from Unstructured sources")
+            st.markdown('##')
+            blob_text = ' '.join(input_data.values())
+            st.write(blob_text)
+            us_response = qdrant_client.search(
+                collection_name='unstructured',
+                query_vector=get_embedding(blob_text),
+                limit=10,
+                with_payload=True,  
+                with_vectors=True,
+                score_threshold=confidence_score_selected/100,
+            )
+            st.write(us_response)
+            for resp in us_response:
+                if resp.score * 100 > confidence_score_selected+5:
+                    st.write(f":green[Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
+                    # html+=f"<h3>Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
+                elif resp.score * 100 > confidence_score_selected :
+                    st.write(f":red[Human review needed for document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
+                    # html+=f"<h3>Human review needed document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
+    
+                account_name = 'insightunstructured'
+                container_name = 'adls'
+                blob_name = resp.payload['source']
+                blob_url = get_sas_token(account_name=account_name, container_name=container_name, blob_name=blob_name)
+                st.write(f"Download link:  {blob_url}")
+                if str(blob_name).endswith(".pdf"):
+                    file_name = str(blob_name).split(".pdf")[0]
+                    blob_service_client = BlobServiceClient.from_connection_string(connect_str)           
+                    download_blob_to_file(blob_service_client, container_name, blob_name, f'./Assets/{file_name}.png')
+                    displayPDF(f'./Assets/{file_name}.png')
+                    st.divider()
+                else:
+                    st.image(blob_url, caption='Found Image', width=300)
+                    st.divider() 
+            st.markdown('##')
+            # st.download_button('Download Report', html, file_name='report.html')
+            
+
+        
+    with Free_Search_Tab:
+        st.subheader("Free text search without starting from a source.")
+        title = st.text_input('Type in a few attributes about the entity you want to find. See an example', 'Johonson White 10932 Brigge road jwhite@domain.com', key='free_search')
+        if len(title.split()) < 3:
+            st.write(":red[Please add in some details]")
+        else:
+            st.markdown('##')
+            if st.button("find me", key='free_find'):
+                identified_entities = pd.DataFrame(columns=["collection", "id", "score", "text"])
+                st.markdown('##')
+                st.markdown('##')
+                collections = [x.name for x in qdrant_client.get_collections().collections if x.name != 'unstructured']
+                for collection in collections:
+                    response = qdrant_client.search(
+                        collection_name=collection,
+                        query_vector=get_embedding(title),
+                        limit=1,
+                        with_payload=True,
+                        with_vectors=False,
+                    )[0]
+                    if response:
+                        entity = pd.DataFrame.from_dict({
+                            "collection": [collection],
+                            "id": [response.id],
+                            "score": [response.score],
+                            "text": [response.payload['full_text']]
+                        })
+                        identified_entities = pd.concat([identified_entities, entity], ignore_index=True)
+                identified_entities.sort_values(by='score',inplace=True, ascending=False)
+                identified_entities = identified_entities.loc[identified_entities['score'] > .8] 
+                new_entities = pd.DataFrame(columns=["collection", "id", "score", "text"])
+                for row in identified_entities.itertuples():
+                    new_point = qdrant_client.retrieve(
+                        collection_name=getattr(row, 'collection'),
+                        ids=[getattr(row, 'id')],
+                    )[0].payload
+                    new_point.pop('full_text')
+                    for x in new_point:
+                        new_entity = pd.DataFrame.from_dict({
+                            "collection": [x],
+                            "id": [new_point[x]['id']],
+                            "score": [new_point[x]['score']],
+                            "text": [new_point[x]['full_text']]
+                        })
+                        new_entities = pd.concat([new_entities, new_entity], ignore_index=True)
+                        new_entities = new_entities.loc[new_entities['score'] > .8] 
+                identified_entities = pd.concat([identified_entities, new_entities], ignore_index=True)
+                identified_entities.sort_values(by='score',inplace=True, ascending=False)
+                identified_entities.sort_values(by=['collection', 'id', 'text', 'score'], ascending=[True, True, True, False], inplace=True)
+                # Step 1: Find the ID with maximum occurrences for each collection
+                max_occurrences = identified_entities.groupby(['collection', 'id']).size().reset_index(name='counts')
+                max_ids = max_occurrences[max_occurrences.groupby(['collection'])['counts'].transform(max) == max_occurrences['counts']]
+                # Step 2: Filter the DataFrame to keep only rows with those IDs
+                filtered_df = identified_entities.merge(max_ids[['collection', 'id']], on=['collection', 'id'])
+                # Step 3: For each collection, keep only the row with the highest score
+                final_df = filtered_df.loc[filtered_df.groupby('collection')['score'].idxmax()]
+                final_df.sort_values(by='score', ascending=False, inplace=True)
+
+                for key, value in full_data.items():
+                    value['concatenated'] = value.apply(lambda row: ' '.join(row.astype(str)), axis=1)
+                for row in final_df.itertuples(): 
+                    score=getattr(row, 'score')
+                    collection=getattr(row, 'collection')
+                    text_to_find=getattr(row,'text')
+                    if getattr(row, 'score') >=.865:
+                        st.write(f':green[Found in **{collection}** with score of **{score}**]')
+                        st.dataframe(full_data[collection].loc[full_data[collection]['concatenated']==text_to_find].iloc[:,:-1],hide_index=True)
+                    else:
+                        st.write(f":red[Not found in **{collection}**]")
+                    st.divider()
+
 
 elif choice == 'Data Simulation':
-    st.image("Assets/Images/logo.png", width=200)
+    # st.image("Assets/Images/logo.png", width=200)
     st.title('Insight PII')
     st.subheader('PII identification and management solutions')
     st.markdown('##')
@@ -714,90 +970,6 @@ elif choice == 'Data Simulation':
         st.image("Assets/Images/neon.png", width=100)
         st.subheader("Neon Vector Database")
         neon_delete = st.toggle('Delete Neon data', key="Neon")
-
-elif choice == 'Identify Records':
-    st.image("Assets/Images/logo.png", width=200)
-    st.title('Insight PII')
-    st.subheader('PII identification and management solutions')
-    st.markdown('##')
-    st.write("Seamlessly unify your organization's data sources, effortlessly identify records for individuals,"
-             " and even uncover references within unstructured data, documents, and images. Unleash the full "
-             "potential of your data integration and record identification needs today!")
-    st.subheader('', divider='rainbow')
-    st.markdown('##')
-
-    st.header('Identify an entity across datasets.')
-    st.markdown('##')
-    title = st.text_input('Type in a few attributes about the entity you want to find. See an example', 'Johonson White 10932 Brigge road jwhite@domain.com')
-    st.markdown('##')
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        confidence_score_selected = st.slider('How confident do you want to be?', 80, 100, 85)
-    st.markdown('##')
-    if st.button("find me"):
-        identified_entities = pd.DataFrame(columns=["collection", "id", "score", "text"])
-        st.markdown('##')
-        st.markdown('##')
-        collections = [x.name for x in qdrant_client.get_collections().collections if x.name != 'unstructured']
-        for collection in collections:
-            response = qdrant_client.search(
-                collection_name=collection,
-                query_vector=get_embedding(title),
-                limit=1,
-                with_payload=True,
-                with_vectors=False,
-            )[0]
-            if response:
-                entity = pd.DataFrame.from_dict({
-                    "collection": [collection],
-                    "id": [response.id],
-                    "score": [response.score],
-                    "text": [response.payload['full_text']]
-                })
-                identified_entities = pd.concat([identified_entities, entity], ignore_index=True)
-        identified_entities.sort_values(by='score',inplace=True, ascending=False)
-        st.write(identified_entities)
-        new_entities = pd.DataFrame(columns=["collection", "id", "score", "text"])
-        for row in identified_entities.itertuples():
-            new_point = qdrant_client.retrieve(
-                collection_name=getattr(row, 'collection'),
-                ids=[getattr(row, 'id')],
-            )[0].payload
-            new_point.pop('full_text')
-            for x in new_point:
-                new_entity = pd.DataFrame.from_dict({
-                    "collection": [x],
-                    "id": [new_point[x]['id']],
-                    "score": [new_point[x]['score']],
-                    "text": [new_point[x]['full_text']]
-                })
-                new_entities = pd.concat([new_entities, new_entity], ignore_index=True)
-        identified_entities = pd.concat([identified_entities, new_entities], ignore_index=True)
-        identified_entities.sort_values(by='score',inplace=True, ascending=False)
-        identified_entities.sort_values(by=['collection', 'id', 'text', 'score'], ascending=[True, True, True, False], inplace=True)
-        # Step 1: Find the ID with maximum occurrences for each collection
-        max_occurrences = identified_entities.groupby(['collection', 'id']).size().reset_index(name='counts')
-        max_ids = max_occurrences[max_occurrences.groupby(['collection'])['counts'].transform(max) == max_occurrences['counts']]
-        # Step 2: Filter the DataFrame to keep only rows with those IDs
-        filtered_df = identified_entities.merge(max_ids[['collection', 'id']], on=['collection', 'id'])
-        # Step 3: For each collection, keep only the row with the highest score
-        final_df = filtered_df.loc[filtered_df.groupby('collection')['score'].idxmax()]
-        st.write(final_df)
- 
-
-        # st.write("step1: best matches") ##
-        # st.write(best_matches) ##
-        # highest_score_collection = max(best_matches, key=lambda k: best_matches[k]['score'])
-        # match_text = best_matches[highest_score_collection]["payload"].pop('full_text')
-        # entry = pd.DataFrame.from_dict({
-        #     "collection": [highest_score_collection],
-        #     "id": [best_matches[highest_score_collection]["id"]],
-        #     "score":  [best_matches[highest_score_collection]["score"]],
-        #     "text": [match_text],
-        #     # "payload": [best_matches[highest_score_collection]["payload"]]
-        # })
-        # identified_entities = pd.concat([identified_entities, entry], ignore_index=True)
-        
 
 
         # if best_matches[highest_score_collection]['score'] < confidence_score_selected/100:
