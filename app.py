@@ -999,3 +999,4 @@ elif choice == 'Data Simulation':
         st.image("Assets/Images/neon.png", width=100)
         st.subheader("Neon Vector Database")
         neon_delete = st.toggle('Delete Neon data', key="Neon")
+
