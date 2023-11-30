@@ -25,6 +25,7 @@ from openai import OpenAI
 from datetime import datetime, timedelta
 import base64
 from fuzzywuzzy import fuzz
+from collections import OrderedDict
 
 load_dotenv()
 
@@ -90,6 +91,24 @@ qdrant_client = QdrantClient(
 #OpenAI client
 openai_api_key = os.getenv("OPENAI_KEY")
 client = OpenAI(api_key=openai_api_key)
+
+def remove_duplicates(s):
+    words = s.split()
+    unique_words = list(OrderedDict.fromkeys(words))
+    return ' '.join(unique_words)
+
+def process_large_documents(client, text):
+    chunks = split_text_into_chunks(text)
+    all_entities = []
+    for chunk in chunks:
+        response = entity_recognition(client, [chunk])
+        all_entities.extend(response)
+    return all_entities
+
+def split_text_into_chunks(text, max_word_count=500):
+    words = text.split()
+    for i in range(0, len(words), max_word_count):
+        yield ' '.join(words[i:i + max_word_count])
 
 def total_match_score(row, conditions_dict):
     score = 0
@@ -386,7 +405,10 @@ if choice == 'Link Records':
                 blob_content = read_blob(blob_client)
                 extracted_text = extract_text_from_image(blob_content)
                 documents = [extracted_text]
-                result = entity_recognition(text_analytics_client, documents)
+                result = process_large_documents(text_analytics_client, extracted_text) # ~~~~~cuncomment below line and delete this
+                # result = entity_recognition(text_analytics_client, documents) # ~~~~~~~~~~~~
+                # LIMIT DOCUMENT SIZE TO 5120 text elements 
+                # WRITE CODE TO BREAK CHUNKS and have same source tag.
                 entities_info = ""
                 if result:
                     for doc in result:
@@ -394,6 +416,7 @@ if choice == 'Link Records':
                             for entity in doc.entities:
                                 entities_info += f" {entity.text}"
                 updated_text = entities_info
+                updated_text = remove_duplicates(updated_text)
                 temp_df_azure = pd.concat([temp_df_azure,pd.DataFrame({'_full_text': [updated_text], '_source': blob.name})], ignore_index=True)
                 extracted_text_dict['unstructured'] = temp_df_azure
             full_data = full_data | extracted_text_dict  
@@ -401,8 +424,6 @@ if choice == 'Link Records':
             st.write('Azure Storage data loaded.')
             st.markdown('##')
             st.metric(label="ADLS", value=f"{len(extracted_text_dict)} Tables", delta=f"{sum(len(df) for df in extracted_text_dict.values())} Rows")
-
-            
 
     st.divider()
     st.subheader("Begin Data Linking.")
