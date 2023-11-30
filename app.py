@@ -304,8 +304,8 @@ def update_collection_payloads(collection_name, best_matches, existing_payloads)
 st.set_page_config(page_title="InsightAIQ", layout="wide")
 st.sidebar.image("Assets/Images/logo.png", width=200)
 st.sidebar.header("InsightAIQ")
-pages = ['Link Records', 'Identify Records', 'Delete Records', 'Data Simulation']
-choice = st.sidebar.radio("Choose a page:", pages)
+pages = ['Link Records', 'Data Simulation']
+choice = st.sidebar.radio("NAVIGATION:", pages)
 
 if choice == 'Link Records':
     # st.image("Assets/Images/logo.png", width=200)
@@ -319,22 +319,26 @@ if choice == 'Link Records':
     st.markdown('##')
     st.subheader("Select Data Sources to link.")
     st.markdown('##')
+    
     full_data={}
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1:
+    
+    sf_col_1, pg_col_1, cosmos_col_1, adls_col_1 = st.columns(4)
+    
+    with sf_col_1:
         st.image("Assets/Images/snowflake.png", width=100)
-        sf = st.checkbox('Snowflake',key='sf_check')    
-        if sf:
+        sf_tick = st.checkbox('Snowflake',key='sf_check')   
+        if sf_tick:
             sf_df = populate_sf_data(sf_conn, SNOWFLAKE_RAW_SCHEMA)
             full_data = full_data | sf_df
             st.markdown('##')
             st.write('Snowflake data loaded.')
             st.markdown('##')
             st.metric(label="Snowflake", value=f"{len(sf_df)} Tables", delta=f"{sum(len(df) for df in sf_df.values())} Rows")
-    with col2:
+            
+    with pg_col_1:
         st.image("Assets/Images/postgres.png", width=100)
-        pg = st.checkbox('Postgres',key='pg_check')
-        if pg:
+        pg_tick = st.checkbox('Postgres',key='pg_check')
+        if pg_tick:
             schema_name = 'insightpii_raw'
             pg_query = f"SELECT table_name FROM information_schema.tables WHERE table_schema = '{schema_name}'"
             pg_table_names = pd.read_sql(pg_query, engine)
@@ -347,43 +351,11 @@ if choice == 'Link Records':
             st.write('Postgres data loaded.')
             st.markdown('##')
             st.metric(label="Postgres", value=f"{len(tables_dict)} Tables", delta=f"{sum(len(df) for df in tables_dict.values())} Rows")
-    with col3:
-        st.image("Assets/Images/adls.png", width=145)
-        sa = st.checkbox('Azure Storage',key='sa_check')
-        if sa:
-            blob_service_client = BlobServiceClient.from_connection_string(connect_str)
-            container_client = blob_service_client.get_container_client(container="adls")
-            extracted_text_dict = {}
-            temp_df_azure = pd.DataFrame(columns=['text','source'])
-            for blob in container_client.list_blobs():
-                blob_client = container_client.get_blob_client(blob)
-                blob_content = read_blob(blob_client)
-                extracted_text = extract_text_from_image(blob_content)
-                documents = [extracted_text]
-                result = entity_recognition(text_analytics_client, documents)
-                entities_info = ""
-                if result:
-                    for doc in result:
-                        if not doc.is_error:
-                            for entity in doc.entities:
-                                entities_info += f" {entity.text}"
-                updated_text = entities_info
-                temp_df_azure = pd.concat([temp_df_azure,pd.DataFrame({'text': [updated_text], '_source': blob.name})], ignore_index=True)
-                extracted_text_dict['unstructured'] = temp_df_azure
-            full_data = full_data | extracted_text_dict  
-            st.markdown('##') 
-            st.write('Azure Storage data loaded.')
-            st.markdown('##')
-            st.metric(label="ADLS", value=f"{len(extracted_text_dict)} Tables", delta=f"{sum(len(df) for df in extracted_text_dict.values())} Rows")
-    with col4:
-        st.image("Assets/Images/s3.png", width=135)
-        s3 = st.checkbox('s3',key='s3_check')
-        if s3:
-            pass
-    with col5:
+            
+    with cosmos_col_1:
         st.image("Assets/Images/cosmos.png", width=100)
-        cdb = st.checkbox('CosmosDb',key='cdb_check')
-        if cdb:
+        cdb_tick = st.checkbox('CosmosDb',key='cdb_check')
+        if cdb_tick:
             dataframes_dict = {}
             for container_properties in database.list_containers():
                 container_name = container_properties['id']
@@ -400,14 +372,46 @@ if choice == 'Link Records':
             st.write('CosmosDb data loaded.')
             st.markdown('##')
             st.metric(label="Cosmos", value=f"{len(dataframes_dict)} Tables", delta=f"{sum(len(df) for df in dataframes_dict.values())} Rows")
-    
+
+    with adls_col_1:
+        st.image("Assets/Images/adls.png", width=145)
+        sa_tick = st.checkbox('Azure Storage',key='sa_check')
+        if sa_tick:
+            blob_service_client = BlobServiceClient.from_connection_string(connect_str)
+            container_client = blob_service_client.get_container_client(container="adls")
+            extracted_text_dict = {}
+            temp_df_azure = pd.DataFrame(columns=['_full_text','_source'])
+            for blob in container_client.list_blobs():
+                blob_client = container_client.get_blob_client(blob)
+                blob_content = read_blob(blob_client)
+                extracted_text = extract_text_from_image(blob_content)
+                documents = [extracted_text]
+                result = entity_recognition(text_analytics_client, documents)
+                entities_info = ""
+                if result:
+                    for doc in result:
+                        if not doc.is_error:
+                            for entity in doc.entities:
+                                entities_info += f" {entity.text}"
+                updated_text = entities_info
+                temp_df_azure = pd.concat([temp_df_azure,pd.DataFrame({'_full_text': [updated_text], '_source': blob.name})], ignore_index=True)
+                extracted_text_dict['unstructured'] = temp_df_azure
+            full_data = full_data | extracted_text_dict  
+            st.markdown('##') 
+            st.write('Azure Storage data loaded.')
+            st.markdown('##')
+            st.metric(label="ADLS", value=f"{len(extracted_text_dict)} Tables", delta=f"{sum(len(df) for df in extracted_text_dict.values())} Rows")
+
+            
+
     st.divider()
     st.subheader("Begin Data Linking.")
     if st.button("Link Data Sources",key='link_data'):
         with st.status("Data linkage started.", expanded=True) as status:
             collections = [x.name for x in qdrant_client.get_collections().collections]
             for table_name, table in full_data.items():
-                table['_full_text'] = table.apply(lambda row: ' '.join(row.values.astype(str)), axis=1)
+                if table_name != 'unstructured':
+                    table['_full_text'] = table.apply(lambda row: ' '.join(row.values.astype(str)), axis=1)
                 table['_embedding'] = table['_full_text'].apply(lambda x: get_embedding(x))
                 if table_name not in collections:
                     if table_name == 'unstructured':
@@ -426,6 +430,7 @@ if choice == 'Link Records':
                                 vector=row['_embedding'],
                                 payload={
                                     "source" : row['_source'],
+                                    "full_text" : row['_full_text']
                                     }
                             ) for index, row in full_data[table_name].iterrows()
                         ]
@@ -450,6 +455,7 @@ if choice == 'Link Records':
                             ) for index, row in full_data[table_name].iterrows()
                         ]
                         qdrant_client.upsert(collection_name=table_name, points=points)
+                    # writing at this indent as this will not be written on UI if collection already exists and user should delete the collection first.
                     st.write(f"{table_name} vectorised.")
             collections = [x.name for x in qdrant_client.get_collections().collections if x.name!='unstructured']
             for collection in collections:
@@ -485,53 +491,51 @@ if choice == 'Link Records':
                         st.write(f"{collection} linked to {other_collection}")
             status.update(label="Linking complete!", state="complete", expanded=False)
     
+
     input_data = {}
+    full_data_unstructured = full_data.pop('unstructured', None)
+
     st.divider()
     st.markdown('##')
     st.subheader("Identify an entity across the selected sources.")
     st.markdown('##')
-    Guided_Search_Tab, Free_Search_Tab = st.tabs(["Guided Search", "Free Form Search"])
+    dict_of_column_names = {key: value.columns.tolist() for key, value in full_data.items()}
+    Guided_Search_Tab, Free_Search_Tab, Document_Search_Tab = st.tabs(["Guided Search", "Free Form Search", "Document Search"])
+
     with Guided_Search_Tab:
-        full_data_unstructured = full_data.pop('unstructured', None)
         st.subheader("Start search from a source system.")
-        chosen_table = st.selectbox("Select a Source:", list(full_data.keys()),None)
+        chosen_table = st.selectbox("Select a Source:", list(dict_of_column_names))
         if chosen_table:
-            selected_columns = st.multiselect("Select at least 3 columns:", full_data[chosen_table].columns)
-            if len(selected_columns) < 3:
-                st.warning("Please select at least 3 columns.")
-            else:
-                with st.container():
-                    # Initialize an empty DataFrame to store user inputs
-                    
-                    if selected_columns:
-                        st.write('Please fill in the details for the selected options:')
-                        # Iterate over the selected options in groups of 2
-                        for i in range(0, len(selected_columns), 3):
-                            # Create a 3-column layout
-                            cols = st.columns(3)
-                            for j in range(3):
-                                if i + j < len(selected_columns):
-                                    selected_column = selected_columns[i + j]
-                                    # Conditionally display datepicker for "Birthdate"
-                                    if selected_column == 'BIRTHDATE':
-                                        input_data[selected_column] = cols[j].date_input(f"{selected_column}:")
-                                    else:
-                                        input_data[selected_column] = cols[j].text_input(f"{selected_column}:")
-        else:
-            st.write("please select a data source to proceed.")
+            selected_columns = st.multiselect("Select at least 3 columns:", dict_of_column_names[chosen_table])
+            with st.container():
+                # Initialize an empty DataFrame to store user inputs
+                if selected_columns:
+                    st.write('Please fill in the details for the selected options:')
+                    # Iterate over the selected options in groups of 3
+                    for i in range(0, len(selected_columns), 3):
+                        # Create a 3-column layout
+                        cols = st.columns(3)
+                        for j in range(3):
+                            if i + j < len(selected_columns):
+                                selected_column = selected_columns[i + j]
+                                # Conditionally display datepicker for "Birthdate"
+                                if selected_column == 'BIRTHDATE':
+                                    input_data[selected_column] = cols[j].date_input(f"{selected_column}:")
+                                else:
+                                    input_data[selected_column] = cols[j].text_input(f"{selected_column}:")
+    
         
         st.markdown('##')
-        if st.button("Search Strcutured Sources", key='guided_fine'):
-            # st.write(input_data)
+        if st.button("Search Structured Sources", key='guided_find'):
+            html = '<h1>IDENTIFIED DATA</h1>'
+            st.divider()
             temp_df = full_data[chosen_table][list(input_data.keys())].copy()
             temp_df['match_score'] = temp_df.apply(total_match_score, axis=1, args=(input_data,))
-            # st.write(temp_df) ## CONTROL CHECKS #
             closest_match_index = temp_df['match_score'].idxmax()
             if temp_df['match_score'].max() < 200:
                 st.subheader(':red[NO RECORDs FOUND]')
+                html += '<h3> NO RECORDS FOUND<h3>'
             else:
-                # st.write(closest_match_index)
-                # st.write(temp_df)
                 starting_point = qdrant_client.retrieve(
                     collection_name=chosen_table,
                     ids=[closest_match_index],
@@ -555,8 +559,6 @@ if choice == 'Link Records':
                     rows_list.append(row)
                 temp_entity_df = pd.DataFrame(rows_list)
                 identified_entities = pd.concat([identified_entities, temp_entity_df], ignore_index=True)
-                # st.write(identified_entities) ## ~~ CHECKS ~~ ##
-
                 new_entities = pd.DataFrame(columns=["collection", "id", "score", "text"])
                 for row in identified_entities.itertuples():
                     new_point = qdrant_client.retrieve(
@@ -592,57 +594,18 @@ if choice == 'Link Records':
                     collection=getattr(row, 'collection')
                     text_to_find=getattr(row,'text')
                     if getattr(row, 'score') >=.85:
-                        st.write(f':green[Found in **{collection}** with score of **{score}**]')
+                        st.write(f':green[Found in **{collection}** with score of **{score * 100:.2f}%**]')
                         st.dataframe(full_data[collection].loc[full_data[collection]['concatenated']==text_to_find].iloc[:,:-1],hide_index=True)
+                        html+=f"<h3>Found in {collection} with score of {score * 100:.2f}%</h3>"
+                        html+=full_data[collection].loc[full_data[collection]['concatenated']==text_to_find].iloc[:,:-1].to_html()
+                        html+='<p>-----------------------</p>'
                     else:
                         st.write(f":red[Not found in **{collection}**]")
+                        html+=f"<h3>Not found in {collection}</h3>"
                     st.divider()
+            st.download_button('Download Report', html, file_name='report.html', key='guided_search_report')
         
-        st.markdown('##')
-        cola, colb, colc = st.columns(3)
-        with cola:
-            confidence_score_selected = st.slider('How confident do you want to be?', 80, 100, 85, key='un_guided_score')
-        if st.button("Search Un-Strcutured Sources", key='Un_guided_fine'):        
-            st.subheader("Data from Unstructured sources")
-            st.markdown('##')
-            blob_text = ' '.join(input_data.values())
-            st.write(blob_text)
-            us_response = qdrant_client.search(
-                collection_name='unstructured',
-                query_vector=get_embedding(blob_text),
-                limit=10,
-                with_payload=True,  
-                with_vectors=True,
-                score_threshold=confidence_score_selected/100,
-            )
-            st.write(us_response)
-            for resp in us_response:
-                if resp.score * 100 > confidence_score_selected+5:
-                    st.write(f":green[Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
-                    # html+=f"<h3>Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
-                elif resp.score * 100 > confidence_score_selected :
-                    st.write(f":red[Human review needed for document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
-                    # html+=f"<h3>Human review needed document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
-    
-                account_name = 'insightunstructured'
-                container_name = 'adls'
-                blob_name = resp.payload['source']
-                blob_url = get_sas_token(account_name=account_name, container_name=container_name, blob_name=blob_name)
-                st.write(f"Download link:  {blob_url}")
-                if str(blob_name).endswith(".pdf"):
-                    file_name = str(blob_name).split(".pdf")[0]
-                    blob_service_client = BlobServiceClient.from_connection_string(connect_str)           
-                    download_blob_to_file(blob_service_client, container_name, blob_name, f'./Assets/{file_name}.png')
-                    displayPDF(f'./Assets/{file_name}.png')
-                    st.divider()
-                else:
-                    st.image(blob_url, caption='Found Image', width=300)
-                    st.divider() 
-            st.markdown('##')
-            # st.download_button('Download Report', html, file_name='report.html')
             
-
-        
     with Free_Search_Tab:
         st.subheader("Free text search without starting from a source.")
         title = st.text_input('Type in a few attributes about the entity you want to find. See an example', 'Johonson White 10932 Brigge road jwhite@domain.com', key='free_search')
@@ -651,6 +614,7 @@ if choice == 'Link Records':
         else:
             st.markdown('##')
             if st.button("find me", key='free_find'):
+                html = '<h1>IDENTIFIED DATA</h1>'
                 identified_entities = pd.DataFrame(columns=["collection", "id", "score", "text"])
                 st.markdown('##')
                 st.markdown('##')
@@ -708,13 +672,60 @@ if choice == 'Link Records':
                     collection=getattr(row, 'collection')
                     text_to_find=getattr(row,'text')
                     if getattr(row, 'score') >=.865:
-                        st.write(f':green[Found in **{collection}** with score of **{score}**]')
+                        st.write(f':green[Found in **{collection}** with score of **{score * 100:.2f}%**]')
                         st.dataframe(full_data[collection].loc[full_data[collection]['concatenated']==text_to_find].iloc[:,:-1],hide_index=True)
+                        html += f'<h3>Found in {collection} with score of {score * 100:.2f}%</h3>'
+                        html+=full_data[collection].loc[full_data[collection]['concatenated']==text_to_find].iloc[:,:-1].to_html()
+                        html+='<p>-----------------------</p>'
+
                     else:
                         st.write(f":red[Not found in **{collection}**]")
+                        html+=f"<h3>Not found in {collection}</h3>"
                     st.divider()
+                st.download_button('Download Report', html, file_name='report.html', key='free_search_report')
 
+    with Document_Search_Tab:
+        st.subheader("Search unstrcutured documents.")
+        blob_text = st.text_input('Type in a few attributes about the entity you want to find. See an example', 'Johonson White 10932 Brigge road jwhite@domain.com', key='docu_search')
+        confidence_score_selected = st.slider('How confident do you want to be?', 75, 100, 80, key='docu_score')
+        html = '<h1>IDENTIFIED DOCUMENTS</h1>'
+        if st.button("Search Document Sources", key='Unstruc_search'):        
+            st.subheader("Data from Unstructured sources")
+            st.markdown('##')
+            us_response = qdrant_client.search(
+                collection_name='unstructured',
+                query_vector=get_embedding(blob_text),
+                limit=10,
+                with_payload=True,  
+                with_vectors=True,
+                score_threshold=confidence_score_selected/100,
+            )
+            if us_response:
+                for resp in us_response:
+                    st.write(f":green[Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
+                    html+=f"<h3>Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
+                    html+="<p>-----------------------</p>"
+                    account_name = 'insightunstructured'
+                    container_name = 'adls'
+                    blob_name = resp.payload['source']
+                    blob_url = get_sas_token(account_name=account_name, container_name=container_name, blob_name=blob_name)
+                    st.write(f"Download link:  {blob_url}")
+                    if str(blob_name).endswith(".pdf"):
+                        file_name = str(blob_name).split(".pdf")[0]
+                        blob_service_client = BlobServiceClient.from_connection_string(connect_str)           
+                        download_blob_to_file(blob_service_client, container_name, blob_name, f'./Assets/{file_name}.png')
+                        displayPDF(f'./Assets/{file_name}.png')
+                        st.divider()
+                    else:
+                        st.image(blob_url, caption='Found Image', width=300)
+                        st.divider() 
+            else:
+                st.write(":red[No Document Found matching the selected confidence]")
+                html+='<h3>No Document Found matching the selected confidence</h3>'
+                st.markdown('##')
+        st.download_button('Download Report', html, file_name='report.html', key='document_search_report')
 
+        
 elif choice == 'Data Simulation':
     # st.image("Assets/Images/logo.png", width=200)
     st.title('Insight PII')
@@ -972,81 +983,7 @@ elif choice == 'Data Simulation':
         neon_delete = st.toggle('Delete Neon data', key="Neon")
 
 
-        # if best_matches[highest_score_collection]['score'] < confidence_score_selected/100:
-        #     st.write(f':red[No matches found within selected confidence scores.]')
-        #     html = '<h1>IDENTIFIED DATA</h1>'
-        # else: 
-        #     for collection in collections:
-        #         if collection != highest_score_collection:
-        #             comparison_vector = best_matches[highest_score_collection]['vector']
-        #             response = qdrant_client.search(
-        #                 collection_name=collection,
-        #                 query_vector=comparison_vector,
-        #                 limit=1,
-        #                 with_payload=True,
-        #                 with_vectors=True,
-        #             )[0]
-        #             if response:
-        #                 best_match = response
-        #                 if best_match.score > best_matches[highest_score_collection]['score']:
-        #                     highest_score_collection = collection
-        #                     best_matches[collection] = {
-        #                         "payload": best_match.payload,
-        #                         "score": best_match.score,
-        #                         "vector": best_match.vector
-        #                     }
-            
-        #     final_comparison_collection = collections[0] if highest_score_collection != collections[0] else collections[1]
-        #     comparison_vector = best_matches[highest_score_collection]['vector']
-
-        #     response = qdrant_client.search(
-        #         collection_name=final_comparison_collection,
-        #         query_vector=comparison_vector,
-        #         limit=1,
-        #         with_payload=True,
-        #         with_vectors=True,
-        #     )[0]
-        #     if response:
-        #         best_match = response
-        #         best_matches[final_comparison_collection] = {
-        #             "payload": best_match.payload,
-        #             "score": best_match.score,
-        #             "vector": best_match.vector
-        #         }
-
-        #     full_data={}
-
-        #     sf_df = populate_sf_data(sf_conn, SNOWFLAKE_RAW_SCHEMA)
-        #     full_data = full_data | sf_df
-
-        #     schema_name = 'insightpii_raw'
-        #     pg_query = f"SELECT table_name FROM information_schema.tables WHERE table_schema = '{schema_name}'"
-        #     pg_table_names = pd.read_sql(pg_query, engine)
-        #     tables_dict = {}
-        #     for table_name in pg_table_names['table_name']:
-        #         query = f'SELECT * FROM "{schema_name}"."{table_name}"'
-        #         tables_dict[table_name] = pd.read_sql(query, engine)
-        #     full_data = full_data | tables_dict
-
-        #     dataframes_dict = {}
-        #     for container_properties in database.list_containers():
-        #         container_name = container_properties['id']
-        #         container = database.get_container_client(container_name)
-        #         items = list(container.query_items(
-        #             query="SELECT * FROM c",
-        #             enable_cross_partition_query=True
-        #         ))
-        #         cleaned_items = [clean_cosmos_item(item) for item in items]
-        #         df = pd.DataFrame(cleaned_items)
-        #         dataframes_dict[container_name] = df
-        #     full_data = full_data | dataframes_dict
-
-        #     for table in full_data:
-        #         cols_to_concatenate = full_data[table].columns.difference(['_source'])
-        #         full_data[table]['_full_text'] = full_data[table][cols_to_concatenate].apply(lambda row: ' '.join(row.values.astype(str)), axis=1)
-            
-        #     html = '<h1>IDENTIFIED DATA</h1>'
-            
+       
         #     for table, content in best_matches.items():
         #         if content['score'] > confidence_score_selected/100:
         #             st.write(f":green[Found in Database: **{table}**, with confidence of **{content['score']* 100:.2f}%**]")
@@ -1093,7 +1030,6 @@ elif choice == 'Data Simulation':
         #         st.image(blob_url, caption='Found Image', width=300)
         #         st.divider() 
         # st.markdown('##')
-        # st.download_button('Download Report', html, file_name='report.html')
         
 
 
