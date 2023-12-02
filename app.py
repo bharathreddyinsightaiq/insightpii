@@ -452,6 +452,9 @@ st.sidebar.header("InsightAIQ")
 pages = ['Link Records', 'Data Simulation', 'Chat with PDFs']
 choice = st.sidebar.radio("NAVIGATION:", pages)
 
+if "conversation" not in st.session_state:
+    st.session_state.conversation = None
+
 if choice == 'Link Records':
     # st.image("Assets/Images/logo.png", width=200)
     st.title('Insight PII')
@@ -862,11 +865,7 @@ if choice == 'Link Records':
         st.download_button('Download Report', html, file_name='report.html', key='document_search_report')
 
     with Document_Talk_Tab:
-        if "conversation" not in st.session_state:
-            st.session_state.conversation = None
         
-
-
         input_url = st.text_input("Paste the name of the document you want to interrogate.")
         if st.button('Process this document', key='process_doc_btn'):
             with st.spinner("Processing"):
