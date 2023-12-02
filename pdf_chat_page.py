@@ -1,6 +1,9 @@
 import streamlit as st
 from htmlTemplates import css, bot_template, user_template
 
+if "conversation" not in st.session_state:
+    st.session_state.conversation = None
+
 def handle_userinput(user_question):
     response = st.session_state.conversation({'question': user_question})
     st.session_state.chat_history = response['chat_history']
