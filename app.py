@@ -92,16 +92,18 @@ qdrant_client = QdrantClient(
 openai_api_key = os.getenv("OPENAI_KEY")
 client = OpenAI(api_key=openai_api_key)
 
+@st.cache_data
 def remove_duplicates(s):
     words = s.split()
     unique_words = list(OrderedDict.fromkeys(words))
     return ' '.join(unique_words)
 
-def process_large_documents(client, text):
+@st.cache_data
+def process_large_documents(text):
     chunks = split_text_into_chunks(text)
     all_entities = []
     for chunk in chunks:
-        response = entity_recognition(client, [chunk])
+        response = entity_recognition([chunk])
         all_entities.extend(response)
     return all_entities
 
@@ -110,12 +112,14 @@ def split_text_into_chunks(text, max_word_count=500):
     for i in range(0, len(words), max_word_count):
         yield ' '.join(words[i:i + max_word_count])
 
+@st.cache_data
 def total_match_score(row, conditions_dict):
     score = 0
     for key, value in conditions_dict.items():
         score += fuzz.ratio(str(row[key]), value)
     return score
 
+@st.cache_data
 def get_sas_token(account_name, container_name, blob_name, account_key=azure_storage_access_key):
     sas_token = generate_blob_sas(
         account_name=account_name,
@@ -127,6 +131,7 @@ def get_sas_token(account_name, container_name, blob_name, account_key=azure_sto
     )
     return f'https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}?{sas_token}'
 
+@st.cache_data
 def query_qdrant(query, collection_name, top_k=1):
     # Creates embedding vector from user query
     embedded_query = client.embeddings.create(
@@ -144,17 +149,20 @@ def query_qdrant(query, collection_name, top_k=1):
 
     return query_results
 
+@st.cache_data
 def get_embedding(text, model="text-embedding-ada-002"):
     text = text.replace("\n", " ")
     return client.embeddings.create(input = [text], model=model).data[0].embedding
 
-def entity_recognition(client, documents):
+@st.cache_data
+def entity_recognition(documents):
     try:
-        response = client.recognize_pii_entities(documents=documents)
+        response = text_analytics_client.recognize_pii_entities(documents=documents)
         return response
     except Exception as err:
         print("Encountered exception. {}".format(err))
 
+@st.cache_data
 def extract_text_from_image(image_content_bytes):
     image_stream = BytesIO(image_content_bytes)
     response = vision_client.read_in_stream(image_stream, raw=True)
@@ -179,12 +187,14 @@ def read_blob(blob_client):
     downloader = blob_client.download_blob()
     return downloader.readall()
 
+@st.cache_data
 def resembles_date(s):
     date_patterns = [
         r'\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}'
     ]
     return any(re.match(pattern, s) for pattern in date_patterns)
 
+@st.cache_data
 def is_parsable_date(s):
     if not resembles_date(s):
         return False
@@ -194,6 +204,7 @@ def is_parsable_date(s):
     except:
         return False
 
+@st.cache_data
 def process_dataframe(dataframe):
     new_cols=[]
     for col in dataframe.columns:
@@ -206,6 +217,7 @@ def process_dataframe(dataframe):
     dataframe.columns = new_cols
     return dataframe
 
+@st.cache_data
 def get_table_creation_sql(dataframe, table_name):
     """Generate a CREATE TABLE SQL statement based on DataFrame dtypes."""
     mapping = {
@@ -248,14 +260,17 @@ def populate_sf_data(conn, schema):
     cur.close()
     return dfs
 
+@st.cache_data
 def clean_cosmos_item(item):
     return {k: v for k, v in item.items() if not k.startswith("_") and k != "id"}
 
+@st.cache_data
 def create_hash(row):
     combined_string = ''.join(row.astype(str))
     hash_object = hashlib.md5(combined_string.encode())
     return hash_object.hexdigest()
 
+@st.cache_data
 def displayPDF(file):
     with open(file, "rb") as f:
         base64_pdf = base64.b64encode(f.read()).decode('utf-8')
@@ -267,6 +282,7 @@ def download_blob_to_file(blob_service_client, container_name, blob_name, file_p
     with open(file_path, "wb") as download_file:
         download_file.write(blob_client.download_blob().readall())
 
+@st.cache_data
 def scroll_collection_points(collection_name):
     points_data = {}
     scroll_result = qdrant_client.scroll(
@@ -281,6 +297,7 @@ def scroll_collection_points(collection_name):
             points_data[result.id] = {'vector': result.vector, 'payload': result.payload}
     return points_data
 
+@st.cache_data
 def find_best_matches(current_collection, other_collections, current_points_data):
 
     best_matches = {}
@@ -308,6 +325,7 @@ def find_best_matches(current_collection, other_collections, current_points_data
         best_matches[point_id] = point_best_matches
     return best_matches
 
+@st.cache_data
 def update_collection_payloads(collection_name, best_matches, existing_payloads):
     for point_id, matches in best_matches.items():
         updated_payload = {**existing_payloads.get(point_id, {}), **matches}
@@ -318,6 +336,63 @@ def update_collection_payloads(collection_name, best_matches, existing_payloads)
             points=[point_id]
         )
 
+def populate_pg_data():
+    schema_name = 'insightpii_raw'
+    pg_query = f"SELECT table_name FROM information_schema.tables WHERE table_schema = '{schema_name}'"
+    pg_table_names = pd.read_sql(pg_query, engine)
+    tables_dict = {}
+    for table_name in pg_table_names['table_name']:
+        query = f'SELECT * FROM "{schema_name}"."{table_name}"'
+        tables_dict[table_name] = pd.read_sql(query, engine)
+
+    return tables_dict
+
+def populate_cosmos_data():
+    dataframes_dict = {}
+    for container_properties in database.list_containers():
+        container_name = container_properties['id']
+        container = database.get_container_client(container_name)
+        items = list(container.query_items(
+            query="SELECT * FROM c",
+            enable_cross_partition_query=True
+        ))
+        cleaned_items = [clean_cosmos_item(item) for item in items]
+        df = pd.DataFrame(cleaned_items)
+        dataframes_dict[container_name] = df
+
+    return dataframes_dict
+
+def populate_adls_data():
+    blob_service_client = BlobServiceClient.from_connection_string(connect_str)
+    container_client = blob_service_client.get_container_client(container="adls")
+    extracted_text_dict = {}
+    temp_df_azure = pd.DataFrame(columns=['_full_text','_source'])
+    for blob in container_client.list_blobs():
+        blob_client = container_client.get_blob_client(blob)
+        blob_content = read_blob(blob_client)
+        extracted_text = extract_text_from_image(blob_content)
+        documents = [extracted_text]
+        result = process_large_documents(extracted_text) 
+        entities_info = ""
+        if result:
+            for doc in result:
+                if not doc.is_error:
+                    for entity in doc.entities:
+                        entities_info += f" {entity.text}"
+        updated_text = entities_info
+        updated_text = remove_duplicates(updated_text)
+        temp_df_azure = pd.concat([temp_df_azure,pd.DataFrame({'_full_text': [updated_text], '_source': blob.name})], ignore_index=True)
+        extracted_text_dict['unstructured'] = temp_df_azure
+
+    return extracted_text_dict
+
+def delete_qdrant_point(collection, id):
+    qdrant_client.delete(
+    collection_name=collection,
+    points_selector=models.PointIdsList(
+        points=[id],
+    )
+)
 
 # Page setup
 st.set_page_config(page_title="InsightAIQ", layout="wide")
@@ -358,13 +433,7 @@ if choice == 'Link Records':
         st.image("Assets/Images/postgres.png", width=100)
         pg_tick = st.checkbox('Postgres',key='pg_check')
         if pg_tick:
-            schema_name = 'insightpii_raw'
-            pg_query = f"SELECT table_name FROM information_schema.tables WHERE table_schema = '{schema_name}'"
-            pg_table_names = pd.read_sql(pg_query, engine)
-            tables_dict = {}
-            for table_name in pg_table_names['table_name']:
-                query = f'SELECT * FROM "{schema_name}"."{table_name}"'
-                tables_dict[table_name] = pd.read_sql(query, engine)
+            tables_dict = populate_pg_data()
             full_data = full_data | tables_dict
             st.markdown('##')
             st.write('Postgres data loaded.')
@@ -375,17 +444,7 @@ if choice == 'Link Records':
         st.image("Assets/Images/cosmos.png", width=100)
         cdb_tick = st.checkbox('CosmosDb',key='cdb_check')
         if cdb_tick:
-            dataframes_dict = {}
-            for container_properties in database.list_containers():
-                container_name = container_properties['id']
-                container = database.get_container_client(container_name)
-                items = list(container.query_items(
-                    query="SELECT * FROM c",
-                    enable_cross_partition_query=True
-                ))
-                cleaned_items = [clean_cosmos_item(item) for item in items]
-                df = pd.DataFrame(cleaned_items)
-                dataframes_dict[container_name] = df
+            dataframes_dict = populate_cosmos_data()
             full_data = full_data | dataframes_dict   
             st.markdown('##')
             st.write('CosmosDb data loaded.')
@@ -396,31 +455,15 @@ if choice == 'Link Records':
         st.image("Assets/Images/adls.png", width=145)
         sa_tick = st.checkbox('Azure Storage',key='sa_check')
         if sa_tick:
-            blob_service_client = BlobServiceClient.from_connection_string(connect_str)
-            container_client = blob_service_client.get_container_client(container="adls")
-            extracted_text_dict = {}
-            temp_df_azure = pd.DataFrame(columns=['_full_text','_source'])
-            for blob in container_client.list_blobs():
-                blob_client = container_client.get_blob_client(blob)
-                blob_content = read_blob(blob_client)
-                extracted_text = extract_text_from_image(blob_content)
-                documents = [extracted_text]
-                result = process_large_documents(text_analytics_client, extracted_text) 
-                entities_info = ""
-                if result:
-                    for doc in result:
-                        if not doc.is_error:
-                            for entity in doc.entities:
-                                entities_info += f" {entity.text}"
-                updated_text = entities_info
-                updated_text = remove_duplicates(updated_text)
-                temp_df_azure = pd.concat([temp_df_azure,pd.DataFrame({'_full_text': [updated_text], '_source': blob.name})], ignore_index=True)
-                extracted_text_dict['unstructured'] = temp_df_azure
+            extracted_text_dict = populate_adls_data()
             full_data = full_data | extracted_text_dict  
             st.markdown('##') 
             st.write('Azure Storage data loaded.')
             st.markdown('##')
             st.metric(label="ADLS", value=f"{len(extracted_text_dict)} Tables", delta=f"{sum(len(df) for df in extracted_text_dict.values())} Rows")
+
+    for table_name, table in full_data.items():
+        table['concatenated'] = table.apply(lambda row: ''.join(row.values.astype(str)), axis=1)
 
     st.divider()
     st.subheader("Begin Data Linking.")
@@ -542,7 +585,7 @@ if choice == 'Link Records':
                                 else:
                                     input_data[selected_column] = cols[j].text_input(f"{selected_column}:")
     
-        
+        html = ""
         st.markdown('##')
         if st.button("Search Structured Sources", key='guided_find'):
             html = '<h1>IDENTIFIED DATA</h1>'
@@ -554,74 +597,86 @@ if choice == 'Link Records':
                 st.subheader(':red[NO RECORDs FOUND]')
                 html += '<h3> NO RECORDS FOUND<h3>'
             else:
-                starting_point = qdrant_client.retrieve(
-                    collection_name=chosen_table,
-                    ids=[closest_match_index],
-                )[0]
-                identified_entities = pd.DataFrame.from_dict({
-                            "collection": [chosen_table],
-                            "id": [starting_point.id],
-                            "score": [1],
-                            "text": [starting_point.payload["full_text"]]
-                        })
-                starting_point.payload.pop("full_text")
-                #code to take match as df with score 1 and payload of match into subsequent rows
-                rows_list = []
-                for collection, values in starting_point.payload.items():
-                    row = {
-                        "collection": collection,
-                        "text": values["full_text"],
-                        "id": values["id"],
-                        "score": values["score"]
-                    }
-                    rows_list.append(row)
-                temp_entity_df = pd.DataFrame(rows_list)
-                identified_entities = pd.concat([identified_entities, temp_entity_df], ignore_index=True)
-                new_entities = pd.DataFrame(columns=["collection", "id", "score", "text"])
-                for row in identified_entities.itertuples():
-                    new_point = qdrant_client.retrieve(
-                        collection_name=getattr(row, 'collection'),
-                        ids=[getattr(row, 'id')],
-                    )[0].payload
-                    new_point.pop('full_text')
-                    for x in new_point:
-                        new_entity = pd.DataFrame.from_dict({
-                            "collection": [x],
-                            "id": [new_point[x]['id']],
-                            "score": [new_point[x]['score']],
-                            "text": [new_point[x]['full_text']]
-                        })
-                        new_entities = pd.concat([new_entities, new_entity], ignore_index=True)
-                identified_entities = pd.concat([identified_entities, new_entities], ignore_index=True)
-                identified_entities.sort_values(by='score',inplace=True, ascending=False)
-                identified_entities.sort_values(by=['collection', 'id', 'text', 'score'], ascending=[True, True, True, False], inplace=True)
-                # Step 1: Find the ID with maximum occurrences for each collection
-                max_occurrences = identified_entities.groupby(['collection', 'id']).size().reset_index(name='counts')
-                max_ids = max_occurrences[max_occurrences.groupby(['collection'])['counts'].transform(max) == max_occurrences['counts']]
-                # Step 2: Filter the DataFrame to keep only rows with those IDs
-                filtered_df = identified_entities.merge(max_ids[['collection', 'id']], on=['collection', 'id'])
-                # Step 3: For each collection, keep only the row with the highest score
-                final_df = filtered_df.loc[filtered_df.groupby('collection')['score'].idxmax()]
-                final_df.sort_values(by='score', ascending=False, inplace=True)
-                
-                # full_data_unstructured = full_data.pop('unstructured', None)
-                for key, value in full_data.items():
-                    value['concatenated'] = value.apply(lambda row: ' '.join(row.astype(str)), axis=1)
-                for row in final_df.itertuples(): 
-                    score=getattr(row, 'score')
-                    collection=getattr(row, 'collection')
-                    text_to_find=getattr(row,'text')
-                    if getattr(row, 'score') >=.85:
-                        st.write(f':green[Found in **{collection}** with score of **{score * 100:.2f}%**]')
-                        st.dataframe(full_data[collection].loc[full_data[collection]['concatenated']==text_to_find].iloc[:,:-1],hide_index=True)
-                        html+=f"<h3>Found in {collection} with score of {score * 100:.2f}%</h3>"
-                        html+=full_data[collection].loc[full_data[collection]['concatenated']==text_to_find].iloc[:,:-1].to_html()
-                        html+='<p>-----------------------</p>'
-                    else:
-                        st.write(f":red[Not found in **{collection}**]")
-                        html+=f"<h3>Not found in {collection}</h3>"
+                try:
+                    starting_point = qdrant_client.retrieve(
+                        collection_name=chosen_table,
+                        ids=[closest_match_index],
+                    )[0]
+                    identified_entities = pd.DataFrame.from_dict({
+                                "collection": [chosen_table],
+                                "id": [starting_point.id],
+                                "score": [1],
+                                "text": [starting_point.payload["full_text"]]
+                            })
+                    starting_point.payload.pop("full_text")
+                    #code to take match as df with score 1 and payload of match into subsequent rows
+                    rows_list = []
+                    for collection, values in starting_point.payload.items():
+                        row = {
+                            "collection": collection,
+                            "text": values["full_text"],
+                            "id": values["id"],
+                            "score": values["score"]
+                        }
+                        rows_list.append(row)
+                    temp_entity_df = pd.DataFrame(rows_list)
+                    identified_entities = pd.concat([identified_entities, temp_entity_df], ignore_index=True)
+                    new_entities = pd.DataFrame(columns=["collection", "id", "score", "text"])
+                    for row in identified_entities.itertuples():
+                        new_point = qdrant_client.retrieve(
+                            collection_name=getattr(row, 'collection'),
+                            ids=[getattr(row, 'id')],
+                        )[0].payload
+                        new_point.pop('full_text')
+                        for x in new_point:
+                            new_entity = pd.DataFrame.from_dict({
+                                "collection": [x],
+                                "id": [new_point[x]['id']],
+                                "score": [new_point[x]['score']],
+                                "text": [new_point[x]['full_text']]
+                            })
+                            new_entities = pd.concat([new_entities, new_entity], ignore_index=True)
+                    identified_entities = pd.concat([identified_entities, new_entities], ignore_index=True)
+                    identified_entities.sort_values(by='score',inplace=True, ascending=False)
+                    identified_entities.sort_values(by=['collection', 'id', 'text', 'score'], ascending=[True, True, True, False], inplace=True)
+                    # Step 1: Find the ID with maximum occurrences for each collection
+                    max_occurrences = identified_entities.groupby(['collection', 'id']).size().reset_index(name='counts')
+                    max_ids = max_occurrences[max_occurrences.groupby(['collection'])['counts'].transform(max) == max_occurrences['counts']]
+                    # Step 2: Filter the DataFrame to keep only rows with those IDs
+                    filtered_df = identified_entities.merge(max_ids[['collection', 'id']], on=['collection', 'id'])
+                    # Step 3: For each collection, keep only the row with the highest score
+                    final_df = filtered_df.loc[filtered_df.groupby('collection')['score'].idxmax()]
+                    final_df.sort_values(by='score', ascending=False, inplace=True)    
+                    st.session_state.final_df = final_df
+                    # full_data_unstructured = full_data.pop('unstructured', None)
+                    for key, value in full_data.items():
+                        value['concatenated'] = value.apply(lambda row: ' '.join(row.astype(str)), axis=1)
+                    for row in final_df.itertuples(): 
+                        score=getattr(row, 'score')
+                        collection=getattr(row, 'collection')
+                        text_to_find=getattr(row,'text')
+                        if getattr(row, 'score') >=.85:
+                            st.write(f':green[Found in **{collection}** with score of **{score * 100:.2f}%**]')
+                            st.dataframe(full_data[collection].loc[full_data[collection]['concatenated']==text_to_find].iloc[:,:-1],hide_index=True)
+                            html+=f"<h3>Found in {collection} with score of {score * 100:.2f}%</h3>"
+                            html+=full_data[collection].loc[full_data[collection]['concatenated']==text_to_find].iloc[:,:-1].to_html()
+                            html+='<p>-----------------------</p>'
+                        else:
+                            st.write(f":red[Not found in **{collection}**]")
+                            html+=f"<h3>Not found in {collection}</h3>"
+                except IndexError:
+                    st.write('red:NO ENTITY FOUND')
                     st.divider()
-            st.download_button('Download Report', html, file_name='report.html', key='guided_search_report')
+        if st.button("Delete this entity", type='primary', key='guided_delete_btn'):
+            for row in st.session_state.final_df.itertuples():
+                delete_qdrant_point(getattr(row,'collection'), getattr(row,'id'))
+                # value_to_drop = getattr(row,'text')
+                # rows_to_drop = full_data[getattr(row,'collection')][full_data[getattr(row,'collection')]['concatenated'] == value_to_drop].index
+                # full_data[getattr(row,'collection')].drop(rows_to_drop, inplace=True)
+            st.write('Entity No Longer Linked.')
+        
+        st.divider()
+        st.download_button('Download Report', html, file_name='report.html', key='guided_search_report')
         
             
     with Free_Search_Tab:
@@ -654,7 +709,7 @@ if choice == 'Link Records':
                         })
                         identified_entities = pd.concat([identified_entities, entity], ignore_index=True)
                 identified_entities.sort_values(by='score',inplace=True, ascending=False)
-                identified_entities = identified_entities.loc[identified_entities['score'] > .8] 
+                identified_entities = identified_entities.loc[identified_entities['score'] > .85] 
                 new_entities = pd.DataFrame(columns=["collection", "id", "score", "text"])
                 for row in identified_entities.itertuples():
                     new_point = qdrant_client.retrieve(
@@ -674,33 +729,45 @@ if choice == 'Link Records':
                 identified_entities = pd.concat([identified_entities, new_entities], ignore_index=True)
                 identified_entities.sort_values(by='score',inplace=True, ascending=False)
                 identified_entities.sort_values(by=['collection', 'id', 'text', 'score'], ascending=[True, True, True, False], inplace=True)
-                # Step 1: Find the ID with maximum occurrences for each collection
-                max_occurrences = identified_entities.groupby(['collection', 'id']).size().reset_index(name='counts')
-                max_ids = max_occurrences[max_occurrences.groupby(['collection'])['counts'].transform(max) == max_occurrences['counts']]
-                # Step 2: Filter the DataFrame to keep only rows with those IDs
-                filtered_df = identified_entities.merge(max_ids[['collection', 'id']], on=['collection', 'id'])
-                # Step 3: For each collection, keep only the row with the highest score
-                final_df = filtered_df.loc[filtered_df.groupby('collection')['score'].idxmax()]
-                final_df.sort_values(by='score', ascending=False, inplace=True)
+                if identified_entities.empty:
+                    st.write(':red[NO ENTITY FOUND.]')
+                else:
+                    # Step 1: Find the ID with maximum occurrences for each collection
+                    max_occurrences = identified_entities.groupby(['collection', 'id']).size().reset_index(name='counts')
+                    max_ids = max_occurrences[max_occurrences.groupby(['collection'])['counts'].transform(max) == max_occurrences['counts']]
+                    # Step 2: Filter the DataFrame to keep only rows with those IDs
+                    filtered_df = identified_entities.merge(max_ids[['collection', 'id']], on=['collection', 'id'])
+                    # Step 3: For each collection, keep only the row with the highest score
+                    final_df = filtered_df.loc[filtered_df.groupby('collection')['score'].idxmax()]
+                    final_df.sort_values(by='score', ascending=False, inplace=True)
+                    st.session_state.final_df = final_df
+                    for key, value in full_data.items():
+                        value['concatenated'] = value.apply(lambda row: ' '.join(row.astype(str)), axis=1)
+                    for row in final_df.itertuples(): 
+                        score=getattr(row, 'score')
+                        collection=getattr(row, 'collection')
+                        text_to_find=getattr(row,'text')
+                        if getattr(row, 'score') >=.865:
+                            st.write(f':green[Found in **{collection}** with score of **{score * 100:.2f}%**]')
+                            st.dataframe(full_data[collection].loc[full_data[collection]['concatenated']==text_to_find].iloc[:,:-1],hide_index=True)
+                            html += f'<h3>Found in {collection} with score of {score * 100:.2f}%</h3>'
+                            html+=full_data[collection].loc[full_data[collection]['concatenated']==text_to_find].iloc[:,:-1].to_html()
+                            html+='<p>-----------------------</p>'
 
-                for key, value in full_data.items():
-                    value['concatenated'] = value.apply(lambda row: ' '.join(row.astype(str)), axis=1)
-                for row in final_df.itertuples(): 
-                    score=getattr(row, 'score')
-                    collection=getattr(row, 'collection')
-                    text_to_find=getattr(row,'text')
-                    if getattr(row, 'score') >=.865:
-                        st.write(f':green[Found in **{collection}** with score of **{score * 100:.2f}%**]')
-                        st.dataframe(full_data[collection].loc[full_data[collection]['concatenated']==text_to_find].iloc[:,:-1],hide_index=True)
-                        html += f'<h3>Found in {collection} with score of {score * 100:.2f}%</h3>'
-                        html+=full_data[collection].loc[full_data[collection]['concatenated']==text_to_find].iloc[:,:-1].to_html()
-                        html+='<p>-----------------------</p>'
+                        else:
+                            st.write(f":red[Not found in **{collection}**]")
+                            html+=f"<h3>Not found in {collection}</h3>"
+                        st.divider()
+        if st.button("Delete this entity", type='primary', key='free_delete_btn'):
+            for row in st.session_state.final_df.itertuples():
+                delete_qdrant_point(getattr(row,'collection'), getattr(row,'id'))
+                # value_to_drop = getattr(row,'text')
+                # rows_to_drop = full_data[full_data['concatenated'] == value_to_drop].index
+                # full_data.drop(rows_to_drop, inplace=True)
+            st.write('Entity No Longer Linked.')
 
-                    else:
-                        st.write(f":red[Not found in **{collection}**]")
-                        html+=f"<h3>Not found in {collection}</h3>"
-                    st.divider()
-                st.download_button('Download Report', html, file_name='report.html', key='free_search_report')
+        st.divider()            
+        st.download_button('Download Report', html, file_name='report.html', key='free_search_report')
 
     with Document_Search_Tab:
         st.subheader("Search unstrcutured documents.")
