@@ -28,6 +28,13 @@ from fuzzywuzzy import fuzz
 from collections import OrderedDict
 # imports the chat app page
 from pdf_chat_page import pdf_chat_app
+from langchain.document_loaders import AzureBlobStorageContainerLoader
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.vectorstores import Qdrant as quadrant_vector_store
+from langchain.embeddings.openai import OpenAIEmbeddings as OAIEmbeddings
+from langchain.memory import ConversationBufferMemory
+from langchain.chains import ConversationalRetrievalChain
+from langchain.chat_models import ChatOpenAI
 
 load_dotenv()
 
@@ -396,6 +403,48 @@ def delete_qdrant_point(collection, id):
     )
 )
 
+def get_text(input_url,connect_str=connect_str):
+    loader = AzureBlobStorageContainerLoader(
+        conn_str=connect_str, container="adls", prefix=input_url
+    )
+    docs = loader.load()
+    return docs
+
+text_splitter = CharacterTextSplitter(
+        separator = "\n\n",
+        chunk_size = 10000,
+        chunk_overlap  = 200,
+        length_function = len,
+        is_separator_regex = False,
+    )
+
+def get_text_chunks(raw_text,text_splitter=text_splitter):            
+    splits = text_splitter.split_documents(raw_text)
+    return splits
+
+def get_vectorstore(splits):
+    split_embeddings = OAIEmbeddings(openai_api_key=openai_api_key)
+    vectorstore = quadrant_vector_store.from_documents(
+        splits,
+        split_embeddings,
+        url=qdrant_url, 
+        prefer_grpc=True,
+        api_key=qdrant_key,
+        collection_name="search_documents",
+        force_recreate=True,
+    )
+    return vectorstore
+    
+def get_conversation_chain(vectorstore):
+    memory = ConversationBufferMemory(memory_key='chat_history', return_messages = True)
+    llm = ChatOpenAI(openai_api_key=openai_api_key)
+    conversation_chain = ConversationalRetrievalChain.from_llm(
+        llm=llm,
+        retriever=vectorstore.as_retriever(),
+        memory = memory
+    )
+    return conversation_chain
+
 # Page setup
 st.set_page_config(page_title="InsightAIQ", layout="wide")
 st.sidebar.image("Assets/Images/logo.png", width=200)
@@ -563,7 +612,7 @@ if choice == 'Link Records':
     st.subheader("Identify an entity across the selected sources.")
     st.markdown('##')
     dict_of_column_names = {key: value.columns.tolist() for key, value in full_data.items()}
-    Guided_Search_Tab, Free_Search_Tab, Document_Search_Tab = st.tabs(["Guided Search", "Free Form Search", "Document Search"])
+    Guided_Search_Tab, Free_Search_Tab, Document_Search_Tab, Document_Talk_Tab = st.tabs(["Guided Search", "Free Form Search", "Document Search", "Document Talk"])
 
     with Guided_Search_Tab:
         st.subheader("Start search from a source system.")
@@ -680,7 +729,6 @@ if choice == 'Link Records':
         st.divider()
         st.download_button('Download Report', html, file_name='report.html', key='guided_search_report')
         
-            
     with Free_Search_Tab:
         st.subheader("Free text search without starting from a source.")
         title = st.text_input('Type in a few attributes about the entity you want to find. See an example', 'Johonson White 10932 Brigge road jwhite@domain.com', key='free_search')
@@ -804,15 +852,37 @@ if choice == 'Link Records':
                         displayPDF(f'./Assets/{file_name}.png')
                         st.divider()
                     else:
+                        st.button("Talk to this document", key = blob_name)
                         st.image(blob_url, caption='Found Image', width=300)
-                        st.divider() 
+                        st.divider()
             else:
                 st.write(":red[No Document Found matching the selected confidence]")
                 html+='<h3>No Document Found matching the selected confidence</h3>'
                 st.markdown('##')
         st.download_button('Download Report', html, file_name='report.html', key='document_search_report')
 
+    with Document_Talk_Tab:
+        if "conversation" not in st.session_state:
+            st.session_state.conversation = None
         
+
+
+        input_url = st.text_input("Paste the name of the document you want to interrogate.")
+        if st.button('Process this document', key='process_doc_btn'):
+            with st.spinner("Processing"):
+                #Upload and get text from the selected document
+                raw_text = get_text(input_url,connect_str)
+                #Split the document
+                splits = get_text_chunks(raw_text)
+                # Create a vector store
+                vectorstore = get_vectorstore(splits)
+                # Create Conversation Chain
+                st.session_state.conversation = get_conversation_chain(vectorstore)
+                # query = "What are the Project goals?"
+                # found_docs = vectorstore.similarity_search(query)
+                # st.write(found_docs)
+            st.success('Done!')
+                
 elif choice == 'Data Simulation':
     # st.image("Assets/Images/logo.png", width=200)
     st.title('Insight PII')
@@ -1071,4 +1141,4 @@ elif choice == 'Data Simulation':
 
 elif choice == 'Chat with PDFs':
     # Call the function for the 'Chat with PDFs' page
-    pdf_chat_app()
+    pdf_chat_app(st.session_state.conversation)
