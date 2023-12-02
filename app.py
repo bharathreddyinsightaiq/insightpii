@@ -26,6 +26,8 @@ from datetime import datetime, timedelta
 import base64
 from fuzzywuzzy import fuzz
 from collections import OrderedDict
+# imports the chat app page
+from pdf_chat_page import pdf_chat_app
 
 load_dotenv()
 
@@ -398,7 +400,7 @@ def delete_qdrant_point(collection, id):
 st.set_page_config(page_title="InsightAIQ", layout="wide")
 st.sidebar.image("Assets/Images/logo.png", width=200)
 st.sidebar.header("InsightAIQ")
-pages = ['Link Records', 'Data Simulation']
+pages = ['Link Records', 'Data Simulation', 'Chat with PDFs']
 choice = st.sidebar.radio("NAVIGATION:", pages)
 
 if choice == 'Link Records':
@@ -1067,3 +1069,6 @@ elif choice == 'Data Simulation':
         st.subheader("Neon Vector Database")
         neon_delete = st.toggle('Delete Neon data', key="Neon")
 
+elif choice == 'Chat with PDFs':
+    # Call the function for the 'Chat with PDFs' page
+    pdf_chat_app()
