@@ -830,38 +830,41 @@ if choice == 'Link Records':
         if st.button("Search Document Sources", key='Unstruc_search'):        
             st.subheader("Data from Unstructured sources")
             st.markdown('##')
-            us_response = qdrant_client.search(
-                collection_name='unstructured',
-                query_vector=get_embedding(blob_text),
-                limit=10,
-                with_payload=True,  
-                with_vectors=True,
-                score_threshold=confidence_score_selected/100,
-            )
-            if us_response:
-                for resp in us_response:
-                    st.write(f":green[Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
-                    html+=f"<h3>Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
-                    html+="<p>-----------------------</p>"
-                    account_name = 'insightunstructured'
-                    container_name = 'adls'
-                    blob_name = resp.payload['source']
-                    blob_url = get_sas_token(account_name=account_name, container_name=container_name, blob_name=blob_name)
-                    st.write(f"Download link:  {blob_url}")
-                    if str(blob_name).endswith(".pdf"):
-                        file_name = str(blob_name).split(".pdf")[0]
-                        blob_service_client = BlobServiceClient.from_connection_string(connect_str)           
-                        download_blob_to_file(blob_service_client, container_name, blob_name, f'./Assets/{file_name}.png')
-                        displayPDF(f'./Assets/{file_name}.png')
-                        st.divider()
-                    else:
-                        st.button("Talk to this document", key = blob_name)
-                        st.image(blob_url, caption='Found Image', width=300)
-                        st.divider()
-            else:
-                st.write(":red[No Document Found matching the selected confidence]")
-                html+='<h3>No Document Found matching the selected confidence</h3>'
-                st.markdown('##')
+            try:
+                us_response = qdrant_client.search(
+                    collection_name='unstructured',
+                    query_vector=get_embedding(blob_text),
+                    limit=10,
+                    with_payload=True,  
+                    with_vectors=True,
+                    score_threshold=confidence_score_selected/100,
+                )
+                if us_response:
+                    for resp in us_response:
+                        st.write(f":green[Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**]")
+                        html+=f"<h3>Found in document **{resp.payload['source']}**, with confience of **{resp.score * 100:.2f}%**</h3>"
+                        html+="<p>-----------------------</p>"
+                        account_name = 'insightunstructured'
+                        container_name = 'adls'
+                        blob_name = resp.payload['source']
+                        blob_url = get_sas_token(account_name=account_name, container_name=container_name, blob_name=blob_name)
+                        st.write(f"Download link:  {blob_url}")
+                        if str(blob_name).endswith(".pdf"):
+                            file_name = str(blob_name).split(".pdf")[0]
+                            blob_service_client = BlobServiceClient.from_connection_string(connect_str)           
+                            download_blob_to_file(blob_service_client, container_name, blob_name, f'./Assets/{file_name}.png')
+                            displayPDF(f'./Assets/{file_name}.png')
+                            st.divider()
+                        else:
+                            st.button("Talk to this document", key = blob_name)
+                            st.image(blob_url, caption='Found Image', width=300)
+                            st.divider()
+                else:
+                    st.write(":red[No Document Found matching the selected confidence]")
+                    html+='<h3>No Document Found matching the selected confidence</h3>'
+                    st.markdown('##')
+            except:
+                st.write(':red[No Records]')
         st.download_button('Download Report', html, file_name='report.html', key='document_search_report')
 
     with Document_Talk_Tab:
