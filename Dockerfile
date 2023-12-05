@@ -1,6 +1,9 @@
 # Use an official Python runtime as a parent image
 FROM python:3.11.6-slim
 
+# for openCV to be available.
+RUN apt-get update && apt-get install -y libgl1
+
 # Set the working directory in the container
 WORKDIR /usr/src/app
 
