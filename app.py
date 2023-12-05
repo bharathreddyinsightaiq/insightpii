@@ -121,7 +121,6 @@ def split_text_into_chunks(text, max_word_count=500):
     for i in range(0, len(words), max_word_count):
         yield ' '.join(words[i:i + max_word_count])
 
-@st.cache_data
 def total_match_score(row, conditions_dict):
     score = 0
     for key, value in conditions_dict.items():
@@ -516,8 +515,8 @@ if choice == 'Link Records':
             st.markdown('##')
             st.metric(label="ADLS", value=f"{len(extracted_text_dict)} Tables", delta=f"{sum(len(df) for df in extracted_text_dict.values())} Rows")
 
-    for table_name, table in full_data.items():
-        table['concatenated'] = table.apply(lambda row: ''.join(row.values.astype(str)), axis=1)
+    # for table_name, table in full_data.items():
+    #     table['concatenated'] = table.apply(lambda row: ''.join(row.values.astype(str)), axis=1)
 
     st.divider()
     st.subheader("Begin Data Linking.")
@@ -614,7 +613,11 @@ if choice == 'Link Records':
     st.markdown('##')
     st.subheader("Identify an entity across the selected sources.")
     st.markdown('##')
-    dict_of_column_names = {key: value.columns.tolist() for key, value in full_data.items()}
+    # dict_of_column_names = {key: value.columns.tolist() for key, value in full_data.items()}
+    dict_of_column_names = {
+        key: [col for col in value.columns if col not in ["_full_text", "_embedding", "concatenated"]]
+        for key, value in full_data.items()
+    }
     Guided_Search_Tab, Free_Search_Tab, Document_Search_Tab, Document_Talk_Tab = st.tabs(["Guided Search", "Free Form Search", "Document Search", "Document Talk"])
 
     with Guided_Search_Tab:
