@@ -24,6 +24,7 @@ python-levenshtein = "^0.23.0"
 langchain = "^0.0.344"
 unstructured = {extras = ["pdf"], version = "^0.11.2"}
 tiktoken = "^0.5.1"
+opencv-python-headless = "^4.8.1.78"
 
 
 [build-system]
