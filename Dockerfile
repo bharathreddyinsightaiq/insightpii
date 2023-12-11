@@ -2,7 +2,7 @@
 FROM python:3.11.6-slim
 
 # for openCV to be available.
-RUN apt-get update && apt-get install -y libglib2.0-0 libsm6 libxrender1 libxext6
+RUN apt-get update && apt-get install -y libglib2.0-0 libsm6 libxrender1 libxext6 libgl1
 
 # Set the working directory in the container
 WORKDIR /usr/src/app
