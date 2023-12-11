@@ -26,7 +26,6 @@ from datetime import datetime, timedelta
 import base64
 from fuzzywuzzy import fuzz
 from collections import OrderedDict
-# imports the chat app page
 from pdf_chat_page import pdf_chat_app
 from langchain.document_loaders import AzureBlobStorageContainerLoader
 from langchain.text_splitter import CharacterTextSplitter
@@ -36,6 +35,7 @@ from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationalRetrievalChain
 from langchain.chat_models import ChatOpenAI
 import streamlit.components.v1 as components
+import requests
 
 load_dotenv()
 
@@ -122,7 +122,7 @@ def process_large_documents(text):
         all_entities.extend(response)
     return all_entities
 
-def split_text_into_chunks(text, max_word_count=500):
+def split_text_into_chunks(text, max_word_count=100):
     words = text.split()
     for i in range(0, len(words), max_word_count):
         yield ' '.join(words[i:i + max_word_count])
@@ -376,6 +376,7 @@ def populate_cosmos_data():
 
     return dataframes_dict
 
+
 def populate_adls_data():
     blob_service_client = BlobServiceClient.from_connection_string(connect_str)
     container_client = blob_service_client.get_container_client(container="adls")
@@ -391,8 +392,13 @@ def populate_adls_data():
         if result:
             for doc in result:
                 if not doc.is_error:
+                    emails = re.findall(r'[a-zA-Z0-9._%+-]+\s*@\s*[a-zA-Z0-9.-]+\s*.[a-zA-Z]{2,}', doc.redacted_text)
+                    if emails:
+                        for email in emails:
+                            entities_info += f" {email}"
                     for entity in doc.entities:
-                        entities_info += f" {entity.text}"
+                        if entity.category not in ['DateTime','Organization','PersonType','URL']:                      
+                            entities_info += f" {entity.text}"
         updated_text = entities_info
         updated_text = remove_duplicates(updated_text)
         temp_df_azure = pd.concat([temp_df_azure,pd.DataFrame({'_full_text': [updated_text], '_source': blob.name})], ignore_index=True)
@@ -522,8 +528,6 @@ if choice == 'Link Records':
             st.markdown('##')
             st.metric(label="ADLS", value=f"{len(extracted_text_dict)} Tables", delta=f"{sum(len(df) for df in extracted_text_dict.values())} Rows")
 
-    # for table_name, table in full_data.items():
-    #     table['concatenated'] = table.apply(lambda row: ''.join(row.values.astype(str)), axis=1)
 
     st.divider()
     st.subheader("Begin Data Linking.")
