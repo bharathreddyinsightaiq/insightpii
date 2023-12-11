@@ -35,6 +35,7 @@ from langchain.embeddings.openai import OpenAIEmbeddings as OAIEmbeddings
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationalRetrievalChain
 from langchain.chat_models import ChatOpenAI
+import streamlit.components.v1 as components
 
 load_dotenv()
 
@@ -100,6 +101,11 @@ qdrant_client = QdrantClient(
 #OpenAI client
 openai_api_key = os.getenv("OPENAI_KEY")
 client = OpenAI(api_key=openai_api_key)
+
+def load_svg(svg_file):
+    with open(svg_file, "r") as file:
+        return file.read()
+svg = load_svg("Assets/Images/test.svg")       
 
 @st.cache_data
 def remove_duplicates(s):
@@ -463,6 +469,7 @@ if choice == 'Link Records':
             "and even uncover references within unstructured data, documents, and images. Unleash the full potential of "
             "your data integration and record identification needs today!")
     st.subheader('', divider='rainbow')
+    st.markdown(svg, unsafe_allow_html=True)
     st.markdown('##')
     st.subheader("Select Data Sources to link.")
     st.markdown('##')
