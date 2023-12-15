@@ -475,7 +475,7 @@ if choice == 'Link Records':
             "and even uncover references within unstructured data, documents, and images. Unleash the full potential of "
             "your data integration and record identification needs today!")
     st.subheader('', divider='rainbow')
-    st.markdown(svg, unsafe_allow_html=True)
+    # st.markdown(svg, unsafe_allow_html=True)
     st.markdown('##')
     st.subheader("Select Data Sources to link.")
     st.markdown('##')
@@ -733,7 +733,7 @@ if choice == 'Link Records':
                             st.write(f":red[Not found in **{collection}**]")
                             html+=f"<h3>Not found in {collection}</h3>"
                 except IndexError:
-                    st.write('red:NO ENTITY FOUND')
+                    st.write(':red [NO ENTITY FOUND]')
                     st.divider()
         if st.button("Delete this entity", type='primary', key='guided_delete_btn'):
             for row in st.session_state.final_df.itertuples():
