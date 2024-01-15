@@ -17,3 +17,6 @@ __pycache__/
 
 # Ignore Docker build files
 Dockerfile.log
+
+# VS code created files
+Assets/Images/.idea/
