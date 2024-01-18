@@ -1158,3 +1158,5 @@ elif choice == 'Data Simulation':
 elif choice == 'Chat with PDFs':
     # Call the function for the 'Chat with PDFs' page
     pdf_chat_app(st.session_state.conversation)
+
+## dunny change
