@@ -723,7 +723,7 @@ if choice == 'Link Records':
                         score=getattr(row, 'score')
                         collection=getattr(row, 'collection')
                         text_to_find=getattr(row,'text')
-                        if getattr(row, 'score') >=.80:
+                        if getattr(row, 'score') >=.75:
                             st.write(f':green[Found in **{collection}** with score of **{score * 100:.2f}%**]')
                             st.dataframe(full_data[collection].loc[full_data[collection]['concatenated']==text_to_find].iloc[:,:-1],hide_index=True)
                             html+=f"<h3>Found in {collection} with score of {score * 100:.2f}%</h3>"
