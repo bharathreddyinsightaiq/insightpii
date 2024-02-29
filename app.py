@@ -164,7 +164,7 @@ def query_qdrant(query, collection_name, top_k=1):
     return query_results
 
 @st.cache_data
-def get_embedding(text, model="text-embedding-ada-002"):
+def get_embedding(text, model="text-embedding-3-large"):
     text = text.replace("\n", " ")
     return client.embeddings.create(input = [text], model=model).data[0].embedding
 
