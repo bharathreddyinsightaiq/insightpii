@@ -542,7 +542,7 @@ if choice == 'Link Records':
                     if table_name == 'unstructured':
                         qdrant_client.create_collection(
                             table_name,
-                            vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
+                            vectors_config=VectorParams(size=3072, distance=Distance.COSINE),
                             hnsw_config=HnswConfigDiff(
                                 m=32,  
                                 ef_construct=400,  
