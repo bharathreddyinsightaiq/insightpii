@@ -150,7 +150,7 @@ def query_qdrant(query, collection_name, top_k=1):
     # Creates embedding vector from user query
     embedded_query = client.embeddings.create(
         input=[query],
-        model="text-embedding-3-small",
+        model="text-embedding-ada-002",
     ).data[0].embedding
 
     query_results = qdrant_client.search(
@@ -164,7 +164,7 @@ def query_qdrant(query, collection_name, top_k=1):
     return query_results
 
 @st.cache_data
-def get_embedding(text, model="text-embedding-3-small"):
+def get_embedding(text, model="text-embedding-ada-002"):
     text = text.replace("\n", " ")
     return client.embeddings.create(input = [text], model=model).data[0].embedding
 
@@ -814,7 +814,7 @@ if choice == 'Link Records':
                         score=getattr(row, 'score')
                         collection=getattr(row, 'collection')
                         text_to_find=getattr(row,'text')
-                        if getattr(row, 'score') >=.865:
+                        if getattr(row, 'score') >=.70:
                             st.write(f':green[Found in **{collection}** with score of **{score * 100:.2f}%**]')
                             st.dataframe(full_data[collection].loc[full_data[collection]['concatenated']==text_to_find].iloc[:,:-1],hide_index=True)
                             html += f'<h3>Found in {collection} with score of {score * 100:.2f}%</h3>'
