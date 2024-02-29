@@ -150,7 +150,7 @@ def query_qdrant(query, collection_name, top_k=1):
     # Creates embedding vector from user query
     embedded_query = client.embeddings.create(
         input=[query],
-        model="text-embedding-ada-002",
+        model="text-embedding-3-large",
     ).data[0].embedding
 
     query_results = qdrant_client.search(
