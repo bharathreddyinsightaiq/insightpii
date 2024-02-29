@@ -723,7 +723,7 @@ if choice == 'Link Records':
                         score=getattr(row, 'score')
                         collection=getattr(row, 'collection')
                         text_to_find=getattr(row,'text')
-                        if getattr(row, 'score') >=.70:
+                        if getattr(row, 'score') >=.85:
                             st.write(f':green[Found in **{collection}** with score of **{score * 100:.2f}%**]')
                             st.dataframe(full_data[collection].loc[full_data[collection]['concatenated']==text_to_find].iloc[:,:-1],hide_index=True)
                             html+=f"<h3>Found in {collection} with score of {score * 100:.2f}%</h3>"
@@ -776,7 +776,7 @@ if choice == 'Link Records':
                         })
                         identified_entities = pd.concat([identified_entities, entity], ignore_index=True)
                 identified_entities.sort_values(by='score',inplace=True, ascending=False)
-                identified_entities = identified_entities.loc[identified_entities['score'] > .70] 
+                identified_entities = identified_entities.loc[identified_entities['score'] > .85] 
                 new_entities = pd.DataFrame(columns=["collection", "id", "score", "text"])
                 for row in identified_entities.itertuples():
                     new_point = qdrant_client.retrieve(
@@ -792,7 +792,7 @@ if choice == 'Link Records':
                             "text": [new_point[x]['full_text']]
                         })
                         new_entities = pd.concat([new_entities, new_entity], ignore_index=True)
-                        new_entities = new_entities.loc[new_entities['score'] > .70] 
+                        new_entities = new_entities.loc[new_entities['score'] > .80] 
                 identified_entities = pd.concat([identified_entities, new_entities], ignore_index=True)
                 identified_entities.sort_values(by='score',inplace=True, ascending=False)
                 identified_entities.sort_values(by=['collection', 'id', 'text', 'score'], ascending=[True, True, True, False], inplace=True)
@@ -814,7 +814,7 @@ if choice == 'Link Records':
                         score=getattr(row, 'score')
                         collection=getattr(row, 'collection')
                         text_to_find=getattr(row,'text')
-                        if getattr(row, 'score') >=.70:
+                        if getattr(row, 'score') >=.865:
                             st.write(f':green[Found in **{collection}** with score of **{score * 100:.2f}%**]')
                             st.dataframe(full_data[collection].loc[full_data[collection]['concatenated']==text_to_find].iloc[:,:-1],hide_index=True)
                             html += f'<h3>Found in {collection} with score of {score * 100:.2f}%</h3>'
