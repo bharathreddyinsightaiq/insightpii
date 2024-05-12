@@ -39,7 +39,7 @@ import requests
 
 load_dotenv()
 
-# PG Database connection parameters
+# PG Database connection parameters.
 pg_host = os.getenv('PG_HOST')
 pg_port = os.getenv('PG_PORT')
 pg_database = os.getenv('PG_DB')
